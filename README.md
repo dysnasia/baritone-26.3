@@ -1,9 +1,27 @@
 # Baritone (26.2 fork)
 
-A Minecraft pathfinder bot, ported to **Minecraft 26.2** (Fabric, Java 25, Mojmap).
+> **Work in progress.** This branch is under active development and has not been extensively tested - things may
+> break, change, or behave unexpectedly between commits. Use at your own risk.
+
+**This is standalone Baritone only, built for Minecraft 26.2 (Fabric). It does not include or bundle Meteor
+Client** - it's just the pathfinding mod itself, installable on its own like any other Fabric mod.
+
+**Environment:** Minecraft 26.2, Fabric loader, Java 25, Mojang mappings.
+
+A Minecraft pathfinder bot, ported to Minecraft 26.2.
 
 This is a personal fork of [MeteorDevelopment/baritone](https://github.com/MeteorDevelopment/baritone) (itself
 built on the original [cabaletta/baritone](https://github.com/cabaletta/baritone)), living on the `26.2` branch.
+
+## Download
+
+Grab the latest build from the [Releases page](https://github.com/dysnasia/baritone-26.2/releases/latest) -
+`baritone-26.2.jar`. Drop it into your Fabric `mods` folder alongside Fabric API.
+
+## Fixes on this branch
+
+- Pathing visuals / path lines fixed
+- Elytra flight (see below for details)
 
 ## What's different in this fork
 
