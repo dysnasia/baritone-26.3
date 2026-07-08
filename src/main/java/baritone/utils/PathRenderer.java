@@ -74,8 +74,9 @@ public final class PathRenderer implements IRenderer {
         if (ctx.world() == null) {
             return;
         }
-        if (ctx.minecraft().screen instanceof GuiClick) {
-            ((GuiClick) ctx.minecraft().screen).onRender(event.getModelViewStack(), event.getProjectionMatrix());
+        Object currentScreen = getCurrentScreen(ctx);
+        if (currentScreen instanceof GuiClick) {
+            ((GuiClick) currentScreen).onRender(event.getModelViewStack(), event.getProjectionMatrix());
         }
 
         final float partialTicks = event.getPartialTicks();
@@ -128,6 +129,10 @@ public final class PathRenderer implements IRenderer {
                 drawManySelectionBoxes(event.getModelViewStack(), ctx.player(), Collections.singletonList(mr.getDest()), settings.colorMostRecentConsidered.value);
             });
         });
+    }
+
+    private static Object getCurrentScreen(IPlayerContext ctx) {
+        return ctx.minecraft().gui.screen();
     }
 
     public static void drawPath(PoseStack stack, List<BetterBlockPos> positions, int startIndex, Color color, boolean fadeOut, int fadeStart0, int fadeEnd0) {

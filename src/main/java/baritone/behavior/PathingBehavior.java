@@ -73,6 +73,7 @@ public final class PathingBehavior extends Behavior implements IPathingBehavior,
     private boolean lastAutoJump;
 
     private BetterBlockPos expectedSegmentStart;
+    private boolean renderDisabledDueToError;
 
     private final LinkedBlockingQueue<PathEvent> toDispatch = new LinkedBlockingQueue<>();
 
@@ -578,6 +579,15 @@ public final class PathingBehavior extends Behavior implements IPathingBehavior,
 
     @Override
     public void onRenderPass(RenderEvent event) {
-        PathRenderer.render(event, this);
+        if (renderDisabledDueToError) {
+            return;
+        }
+        try {
+            PathRenderer.render(event, this);
+        } catch (Throwable t) {
+            renderDisabledDueToError = true;
+            logDirect("Baritone render compatibility issue detected. Disabling Baritone path rendering to prevent crashes.");
+            t.printStackTrace();
+        }
     }
 }

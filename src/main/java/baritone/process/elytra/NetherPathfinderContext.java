@@ -43,7 +43,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * @author Brady
  */
-public final class NetherPathfinderContext {
+public final class NetherPathfinderContext implements ElytraTerrainProvider {
 
     private static final BlockState AIR_BLOCK_STATE = Blocks.AIR.defaultBlockState();
     // This lock must be held while there are active pointers to chunks in java,
@@ -54,26 +54,41 @@ public final class NetherPathfinderContext {
     final long context;
     private final long seed;
     private final ExecutorService executor;
+    private final BlockStateOctreeInterface boi;
 
     public NetherPathfinderContext(long seed) {
         this.context = NetherPathfinder.newContext(seed);
         this.seed = seed;
         this.executor = Executors.newSingleThreadExecutor();
+        this.boi = new BlockStateOctreeInterface(this);
     }
 
+    @Override
     public boolean hasChunk(ChunkPos pos) {
         return NetherPathfinder.hasChunkFromJava(this.context, pos.x(), pos.z());
     }
 
-    public void queueCacheCulling(int chunkX, int chunkZ, int maxDistanceBlocks, BlockStateOctreeInterface boi) {
+    @Override
+    public Object cullingLock() {
+        return this.cullingLock;
+    }
+
+    @Override
+    public void queueCacheCulling(int chunkX, int chunkZ, int maxDistanceBlocks) {
         this.executor.execute(() -> {
             synchronized (this.cullingLock) {
-                boi.chunkPtr = 0L;
+                this.boi.chunkPtr = 0L;
                 NetherPathfinder.cullFarChunks(this.context, chunkX, chunkZ, maxDistanceBlocks);
             }
         });
     }
 
+    @Override
+    public boolean isPassable(int x, int y, int z) {
+        return !this.boi.get0(x, y, z);
+    }
+
+    @Override
     public void queueForPacking(final LevelChunk chunkIn) {
         final SoftReference<LevelChunk> ref = new SoftReference<>(chunkIn);
         this.executor.execute(() -> {
@@ -87,6 +102,7 @@ public final class NetherPathfinderContext {
         });
     }
 
+    @Override
     public void queueBlockUpdate(BlockChangeEvent event) {
         this.executor.execute(() -> {
             ChunkPos chunkPos = event.getChunkPos();
@@ -101,7 +117,8 @@ public final class NetherPathfinderContext {
         });
     }
 
-    public CompletableFuture<PathSegment> pathFindAsync(final BlockPos src, final BlockPos dst) {
+    @Override
+    public CompletableFuture<UnpackedSegment> pathFindAsync(final BlockPos src, final BlockPos dst) {
         return CompletableFuture.supplyAsync(() -> {
             final PathSegment segment = NetherPathfinder.pathFind(
                     this.context,
@@ -115,7 +132,7 @@ public final class NetherPathfinderContext {
             if (segment == null) {
                 throw new PathCalculationException("Path calculation failed");
             }
-            return segment;
+            return UnpackedSegment.from(segment);
         }, this.executor);
     }
 
@@ -144,8 +161,14 @@ public final class NetherPathfinderContext {
      * @param end   The ending point
      * @return {@code true} if there is visibility between the points
      */
+    @Override
     public boolean raytrace(final Vec3 start, final Vec3 end) {
         return NetherPathfinder.isVisible(this.context, NetherPathfinder.CACHE_MISS_SOLID, start.x, start.y, start.z, end.x, end.y, end.z);
+    }
+
+    @Override
+    public boolean raytraceBatch(final int count, final double[] src, final double[] dst) {
+        return this.raytrace(count, src, dst, Visibility.ALL);
     }
 
     public boolean raytrace(final int count, final double[] src, final double[] dst, final int visibility) {
@@ -169,6 +192,7 @@ public final class NetherPathfinderContext {
         NetherPathfinder.cancel(this.context);
     }
 
+    @Override
     public void destroy() {
         this.cancel();
         // Ignore anything that was queued up, just shutdown the executor

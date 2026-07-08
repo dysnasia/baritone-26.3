@@ -60,19 +60,23 @@ public class ElytraCommand extends Command {
         }
 
         if (!args.hasAny()) {
-            if (Baritone.settings().elytraTermsAccepted.value) {
-                if (detectOn2b2t()) {
-                    warn2b2t();
+            final boolean inNether = ctx.world().dimension() == Level.NETHER;
+            if (inNether) {
+                if (Baritone.settings().elytraTermsAccepted.value) {
+                    if (detectOn2b2t()) {
+                        warn2b2t();
+                    }
+                } else {
+                    gatekeep();
                 }
-            } else {
-                gatekeep();
             }
             Goal iGoal = customGoalProcess.mostRecentGoal();
             if (iGoal == null) {
                 throw new CommandInvalidStateException("No goal has been set");
             }
-            if (ctx.world().dimension() != Level.NETHER) {
-                throw new CommandInvalidStateException("Only works in the nether");
+            final var dimension = ctx.world().dimension();
+            if (dimension != Level.NETHER && dimension != Level.OVERWORLD && dimension != Level.END) {
+                throw new CommandInvalidStateException("Only works in the overworld, the nether, and the end");
             }
             try {
                 elytra.pathTo(iGoal);

@@ -64,20 +64,7 @@ public class MixinMinecraft {
 
     @Inject(
             method = "tick",
-            at = @At(
-                    value = "FIELD",
-                    opcode = Opcodes.GETFIELD,
-                    target = "net/minecraft/client/Minecraft.screen:Lnet/minecraft/client/gui/screens/Screen;",
-                    ordinal = 0,
-                    shift = At.Shift.BEFORE
-            ),
-            slice = @Slice(
-                    from = @At(
-                            value = "FIELD",
-                            opcode = Opcodes.PUTFIELD,
-                            target = "net/minecraft/client/Minecraft.missTime:I"
-                    )
-            )
+            at = @At("HEAD")
     )
     private void runTick(CallbackInfo ci) {
         this.tickProvider = TickEvent.createNextProvider();
@@ -111,6 +98,7 @@ public class MixinMinecraft {
 
     @Inject(
             method = "tick",
+            require = 0,
             at = @At(
                     value = "INVOKE",
                     target = "net/minecraft/client/multiplayer/ClientLevel.tickEntities()V",
@@ -164,6 +152,7 @@ public class MixinMinecraft {
 
     @Redirect(
             method = "tick",
+            require = 0,
             at = @At(
                     value = "FIELD",
                     opcode = Opcodes.GETFIELD,
@@ -185,7 +174,7 @@ public class MixinMinecraft {
         if (BaritoneAPI.getProvider().getPrimaryBaritone().getPathingBehavior().isPathing() && player != null) {
             return null;
         }
-        return instance.screen;
+        return instance.gui.screen();
     }
 
     // TODO

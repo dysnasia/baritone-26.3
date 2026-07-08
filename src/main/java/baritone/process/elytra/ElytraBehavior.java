@@ -48,6 +48,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.Fireworks;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.AirBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkSource;
@@ -78,7 +79,7 @@ public final class ElytraBehavior implements Helper {
     private List<BetterBlockPos> visiblePath;
 
     // :sunglasses:
-    public final NetherPathfinderContext context;
+    public final ElytraTerrainProvider context;
     public final PathManager pathManager;
     private final ElytraProcess process;
 
@@ -105,7 +106,6 @@ public final class ElytraBehavior implements Helper {
     private final int[] nextTickBoostCounter;
 
     private BlockStateInterface bsi;
-    private final BlockStateOctreeInterface boi;
     public final BetterBlockPos destination;
     private final boolean appendDestination;
 
@@ -115,6 +115,12 @@ public final class ElytraBehavior implements Helper {
     private boolean solveNextTick;
 
     private long timeLastCacheCull = 0L;
+
+    // firework entity lookup cache (avoids re-scanning the entity list every solve call)
+    private Optional<FireworkRocketEntity> cachedAttachedFirework = Optional.empty();
+    private boolean cachedAttachedFireworkValid = false;
+    private int fireworkScanCount = 0;
+    private int fireworkScanCallsSaved = 0;
 
     // auto swap
     private int invTickCountdown = 0;
@@ -132,8 +138,9 @@ public final class ElytraBehavior implements Helper {
         this.solverExecutor = Executors.newSingleThreadExecutor();
         this.nextTickBoostCounter = new int[2];
 
-        this.context = new NetherPathfinderContext(Baritone.settings().elytraNetherSeed.value);
-        this.boi = new BlockStateOctreeInterface(context);
+        this.context = this.ctx.world().dimension() == Level.NETHER
+                ? new NetherPathfinderContext(Baritone.settings().elytraNetherSeed.value)
+                : new VanillaElytraContext(this.ctx);
     }
 
     public final class PathManager {
@@ -246,7 +253,7 @@ public final class ElytraBehavior implements Helper {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
                                 logDirect("Failed to compute next segment");
-                                if (ctx.player().distanceToSqr(pathStart.getCenter()) < 16 * 16) {
+                                if (pathStart.distToCenterSqr(ctx.player().position()) < 16 * 16) {
                                     logVerbose("Player is near the segment start, therefore repeating this calculation is pointless. Marking as complete");
                                     completePath = true;
                                 }
@@ -296,7 +303,6 @@ public final class ElytraBehavior implements Helper {
         // mickey resigned
         private CompletableFuture<Void> path0(BlockPos src, BlockPos dst, UnaryOperator<UnpackedSegment> operator) {
             return ElytraBehavior.this.context.pathFindAsync(src, dst)
-                    .thenApply(UnpackedSegment::from)
                     .thenApply(operator)
                     .thenAcceptAsync(this::setPath, ctx.minecraft()::execute);
         }
@@ -512,17 +518,21 @@ public final class ElytraBehavior implements Helper {
     }
 
     public void onTick() {
-        synchronized (this.context.cullingLock) {
+        synchronized (this.context.cullingLock()) {
             this.onTick0();
         }
         final long now = System.currentTimeMillis();
         if ((now - this.timeLastCacheCull) / 1000 > Baritone.settings().elytraTimeBetweenCacheCullSecs.value) {
-            this.context.queueCacheCulling(ctx.player().chunkPosition().x(), ctx.player().chunkPosition().z(), Baritone.settings().elytraCacheCullDistance.value, this.boi);
+            this.context.queueCacheCulling(ctx.player().chunkPosition().x(), ctx.player().chunkPosition().z(), Baritone.settings().elytraCacheCullDistance.value);
             this.timeLastCacheCull = now;
         }
     }
 
     private void onTick0() {
+        // A new real game tick has started, the firework entity list can only have changed since the last time
+        // we looked, so throw away last tick's cached lookup.
+        this.cachedAttachedFireworkValid = false;
+
         // Fetch the previous solution, regardless of if it's going to be used
         this.pendingSolution = null;
         if (this.solver != null) {
@@ -941,11 +951,26 @@ public final class ElytraBehavior implements Helper {
     }
 
     private Optional<FireworkRocketEntity> getAttachedFirework() {
-        return ctx.entitiesStream()
+        if (this.cachedAttachedFireworkValid) {
+            this.fireworkScanCallsSaved++;
+            return this.cachedAttachedFirework;
+        }
+
+        this.cachedAttachedFirework = ctx.entitiesStream()
                 .filter(x -> x instanceof FireworkRocketEntity)
                 .filter(x -> Objects.equals(((IFireworkRocketEntity) x).getBoostedEntity(), ctx.player()))
                 .map(x -> (FireworkRocketEntity) x)
                 .findFirst();
+        this.cachedAttachedFireworkValid = true;
+
+        this.fireworkScanCount++;
+        if (Baritone.settings().elytraChatSpam.value && this.fireworkScanCount % 200 == 0) {
+            logDebug(String.format("firework entity scan #%d this session (%d calls served from cache since last log)",
+                    this.fireworkScanCount, this.fireworkScanCallsSaved));
+            this.fireworkScanCallsSaved = 0;
+        }
+
+        return this.cachedAttachedFirework;
     }
 
     private boolean isHitboxClear(final SolverContext context, final Vec3 dest, final Double growAmount) {
@@ -1000,7 +1025,7 @@ public final class ElytraBehavior implements Helper {
             return clear;
         }
 
-        return this.context.raytrace(8, src, dst, NetherPathfinderContext.Visibility.ALL);
+        return this.context.raytraceBatch(8, src, dst);
     }
 
     public boolean clearView(Vec3 start, Vec3 dest, boolean ignoreLava) {
@@ -1268,7 +1293,7 @@ public final class ElytraBehavior implements Helper {
             final BlockState state = this.bsi.get0(x, y, z);
             return state.getBlock() instanceof AirBlock || MovementHelper.isLava(state);
         } else {
-            return !this.boi.get0(x, y, z);
+            return this.context.isPassable(x, y, z);
         }
     }
 

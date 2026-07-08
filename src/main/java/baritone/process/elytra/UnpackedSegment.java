@@ -80,4 +80,8 @@ public final class UnpackedSegment {
                 segment.finished
         );
     }
+
+    public static UnpackedSegment of(final List<BetterBlockPos> path, final boolean finished) {
+        return new UnpackedSegment(path.stream(), finished);
+    }
 }

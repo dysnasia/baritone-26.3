@@ -130,7 +130,16 @@ public final class GameEventHandler implements IEventBus, Helper {
 
     @Override
     public final void onRenderPass(RenderEvent event) {
-        listeners.forEach(l -> l.onRenderPass(event));
+        for (IGameEventListener listener : listeners) {
+            try {
+                listener.onRenderPass(event);
+            } catch (Throwable t) {
+                // Disable only the failing render listener to keep the client running.
+                listeners.remove(listener);
+                System.out.println("Disabled Baritone render listener due to compatibility error: " + listener.getClass().getName());
+                t.printStackTrace();
+            }
+        }
     }
 
     @Override
