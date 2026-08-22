@@ -1,5 +1,6 @@
 # Meteor
--keep class *
+# keep class AND member names, otherwise meteor's baritone mixins can't find targets like ComeCommand.execute
+-keep class * { *; }
 
 
 
