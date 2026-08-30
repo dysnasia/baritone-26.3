@@ -15,7 +15,6 @@
  * along with Baritone.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import baritone.gradle.task.CreateDistTask
 import baritone.gradle.task.ProguardTask
 //import baritone.gradle.task.TweakerJsonAssembler
 
@@ -100,9 +99,6 @@ task proguard(type: ProguardTask) {
     proguardVersion "7.8.2"
 }
 
-task createDist(type: CreateDistTask, dependsOn: proguard)
-
-build.finalizedBy(createDist)
 
 publishing {
     publications {

@@ -22,7 +22,7 @@
 -dontwarn org.lwjgl.**
 # also lwjgl lol
 -dontwarn module-info
-# we dont have forge
+# the forge entrypoint is absent from non-forge builds
 -dontwarn baritone.launch.BaritoneForgeModXD
 # progard doesn't like signature polymorphism
 -dontwarn java.lang.invoke.MethodHandle

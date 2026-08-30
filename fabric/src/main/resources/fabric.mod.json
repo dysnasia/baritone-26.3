@@ -1,12 +1,15 @@
 {
   "schemaVersion": 1,
-  "id": "baritone-meteor",
+  "id": "baritone-fork",
   "version": "${version}",
 
   "name": "Baritone",
-  "description": "Google Maps for Blockgame",
+  "description": "Google Maps for Blockgame. Original work by leijurv, Brady and the Baritone contributors (https://github.com/cabaletta/baritone), licensed LGPL-3.0. This is an unofficial fork ported to Minecraft 26.2, not affiliated with or endorsed by the upstream authors.",
   "authors": [
     "leijurv", "Brady"
+  ],
+  "contributors": [
+    "dysnasia (26.2 fork maintainer)"
   ],
   "contact": {
     "homepage": "https://github.com/cabaletta/baritone",
@@ -21,7 +24,7 @@
   "entrypoints": {
   },
   "mixins": [
-      "mixins.baritone-meteor.json"
+      "mixins.baritone.json"
   ],
   "depends": {
     "fabricloader": ">=0.18.6",

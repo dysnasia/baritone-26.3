@@ -96,6 +96,16 @@ class BaritoneGradleTask extends DefaultTask {
         }
     }
 
+    /**
+     * Checks for a ProGuard output as well, so that a missing one is reported as a skipped build step rather than as
+     * a bare NoSuchFileException from whatever tried to copy it.
+     */
+    protected void verifyProguardArtifact(Path path) throws IllegalStateException {
+        if (!Files.exists(path)) {
+            throw new IllegalStateException("Artifact not found! Run proguard first! Missing file: " + path);
+        }
+    }
+
     protected void write(InputStream stream, Path file) throws IOException {
         if (Files.exists(file)) {
             Files.delete(file);

@@ -26,19 +26,17 @@ Building Baritone will create the final artifacts in the ``dist`` directory. The
 
 **The Forge, NeoForge and Fabric releases can simply be added as a Forge/Neoforge/Fabric mods.**
 
-If another one of your other mods has a Baritone integration, you want `baritone-api-*-VERSION.jar`.
-If you want to report a bug and spare us some effort, you want `baritone-unoptimized-*-VERSION.jar`.
-Otherwise, you want `baritone-standalone-*-VERSION.jar`
+`dist` holds one jar per enabled loader, `baritone-LOADER-VERSION.jar`. That is the API build, so it is both the
+jar you install and the one another mod can integrate against.
 
-Here's what the various qualifiers mean
-- **API**: Only the non-api packages are obfuscated. This should be used in environments where other mods would like to use Baritone's features.
-- **Standalone**: Everything is obfuscated. Other mods cannot use Baritone, but you get a bit of extra performance.
-- **Unoptimized**: Nothing is obfuscated. This shouldn't be used in production, but is really helpful for crash reports.
+The standalone and unoptimized builds are not copied to `dist`; look in `LOADER/build/libs` if you want them.
+- **API** (built as `LOADER/build/libs/baritone-api-LOADER-VERSION.jar`, copied to `dist` as `baritone-LOADER-VERSION.jar`): Only the non-api packages are obfuscated. This should be used in environments where other mods would like to use Baritone's features.
+- **Standalone** (`LOADER/build/libs/baritone-standalone-LOADER-VERSION.jar`): Everything is obfuscated. Other mods cannot use Baritone, but you get a bit of extra performance.
+- **Unoptimized** (`LOADER/build/libs/baritone-unoptimized-LOADER-VERSION.jar`): Nothing is obfuscated. This shouldn't be used in production, but is really helpful for crash reports.
 
-- **No loader**: Loadable as a launchwrapper tweaker against vanilla Minecraft using a custom `version.json`.
 - **Forge/Neoforge/Fabric**: Loadable as a standard mod using the respective loader. The fabric build may or may not work on Quilt.
 
-If you build from source you will also find mapping files in the `dist` directory. These contain the renamings done by ProGuard and are useful if you want to read obfuscated stack traces.
+If you build from source you will also find mapping files in the `mapping` directory. These contain the renamings done by ProGuard and are useful if you want to read obfuscated stack traces.
 
 ## Build it yourself
 - Clone or download Baritone
@@ -57,6 +55,7 @@ The recommended Java versions by Minecraft version are
 | 1.17.1                        | 16            |
 | 1.18.2 - 1.20.4               | 17            |
 | 1.20.5 - 1.21.8               | 21            |
+| 26.2                          | 25            |
 
 Download java: https://adoptium.net/
 

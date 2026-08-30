@@ -85,6 +85,7 @@ allprojects {
     dependencies {
         compileOnly "org.spongepowered:mixin:${project.mixin_version}"
         compileOnly "org.ow2.asm:asm:${project.asm_version}"
+        compileOnly "org.ow2.asm:asm-tree:${project.asm_version}"
 
         implementation "dev.babbaj:nether-pathfinder:${project.nether_pathfinder_version}"
 
@@ -149,8 +150,25 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
+// The mixin classes are shared by every platform jar, so they have to target the lowest bytecode level any of our
+// loaders' Mixin can read. Fabric ships a fork that goes up to JAVA_25, but Forge ships stock Mixin 0.8.7, whose
+// highest compatibility level is JAVA_21 (class file v65) -- anything newer is rejected outright at mixin apply
+// time. Keep this in sync with "compatibilityLevel" in src/launch/resources/mixins.baritone.json.
+tasks.named("compileLaunchJava") {
+    options.release = 21
+}
+
 jar {
     from sourceSets.main.output, sourceSets.launch.output, sourceSets.api.output
+}
+
+// The per-file license headers are comments, so they do not survive compilation. Ship the license texts and the
+// attribution notice inside every jar as well, so a distributed binary carries the same notices the source tree
+// does. These land in the root project's resources, which every loader jar shades in.
+processResources {
+    from(rootProject.files("LICENSE", "COPYING", "NOTICE", "LICENSE-Part-2.jpg")) {
+        into "META-INF"
+    }
 }
 
 javadoc {

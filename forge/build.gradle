@@ -107,7 +107,7 @@ build.finalizedBy(createDist)
 
 publishing {
     publications {
-        mavenFabric(MavenPublication) {
+        mavenForge(MavenPublication) {
             artifactId = rootProject.archives_base_name + "-" + project.name
             from components.java
         }

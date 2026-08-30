@@ -97,25 +97,14 @@ build.finalizedBy(createDist)
 publishing {
     publications {
         maven(MavenPublication) {
-            groupId "meteordevelopment"
+            groupId "baritone"
             artifactId "baritone"
-            artifact "../dist/baritone-api-fabric-" + version + ".jar"
+            artifact(file("../dist/baritone-fabric-" + version + ".jar")) { builtBy tasks.createDist }
             artifact sourcesJar
         }
     }
 
-    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
-    repositories {
-        maven {
-            name = "meteor-maven"
-            url = "https://maven.meteordev.org/snapshots"
-            credentials {
-                username = System.getenv("MAVEN_METEOR_ALIAS")
-                password = System.getenv("MAVEN_METEOR_TOKEN")
-            }
-            authentication {
-                basic(BasicAuthentication)
-            }
-        }
-    }
+    // No remote repository is configured; `publishToMavenLocal` installs the jar into ~/.m2 so another local
+    // project can depend on it. See
+    // https://docs.gradle.org/current/userguide/publishing_maven.html to add a real repository.
 }

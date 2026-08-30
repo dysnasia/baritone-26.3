@@ -6,13 +6,14 @@
 # The name of the mod loader type to load - for regular FML @Mod mods it should be javafml
 modLoader="javafml" #mandatory
 # A version range to match for said mod loader - for regular FML @Mod it will be the forge version
-loaderVersion="[1,)" #mandatory This is typically bumped every Minecraft version by Forge. See our download page for lists of versions.
-license="https://raw.githubusercontent.com/cabaletta/baritone/1.16.2/LICENSE"
+loaderVersion="[3,)" #mandatory Matches the javafml version declared by NeoForge 26.2.0.19-beta itself ("[3,]").
+license="LGPL-3.0-only"
 # A URL to refer people to when problems occur with this mod
 issueTrackerURL="https://github.com/cabaletta/baritone/issues" #optional
 # A list of mods - how many allowed here is determined by the individual mod loader
 [[mods]] #mandatory
-# The modid of the mod
+# The modid of the mod. This deliberately is NOT "baritone": BaritoneMixinPlugin stands down when a mod with
+# that id is already loaded, so using it here would make this jar detect itself and skip all of its mixins.
 modId="baritoe" #mandatory
 # The version number of the mod - there's a few well known ${} variables useable here or just hardcode it
 version="${version}" #mandatory
@@ -23,21 +24,23 @@ displayURL="https://github.com/cabaletta/baritone" #optional
 # A file name (in the root of the mod JAR) containing a logo for display
 #logoFile="examplemod.png" #optional
 # A text field displayed in the mod UI
-credits="Hat Gamers" #optional
+credits="Baritone was created by leijurv and Brady at https://github.com/cabaletta/baritone. This is an unofficial fork ported to 26.2; see NOTICE in the jar." #optional
 # A text field displayed in the mod UI
 authors="leijurv, Brady" #optional
 # The description text for the mod (multi line!) (#mandatory)
 description='''
-A Minecraft pathfinder bot.
+A Minecraft pathfinder bot. Original work by leijurv, Brady and the Baritone contributors
+(https://github.com/cabaletta/baritone), licensed LGPL-3.0. This is an unofficial fork ported to
+Minecraft 26.2; it is not affiliated with or endorsed by the upstream authors.
 '''
 
 [[dependencies.baritoe]]
 modId="minecraft"
 type="required"
 # This version range declares a minimum of the current minecraft version up to but not including the next major version
-versionRange="[26.1]"
+versionRange="[26.2]"
 ordering="NONE"
-side="BOTH"
+side="CLIENT"
 
 [[mixins]]
 config = "mixins.baritone.json"
