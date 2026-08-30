@@ -7,7 +7,7 @@ Baritone is a Minecraft pathfinder bot. This repository is a fork of it ported t
 Fabric, Forge and NeoForge. It is standalone Baritone, the pathfinding mod on its own, installable like any other
 mod. It does not include or bundle Meteor Client.
 
-Environment: Minecraft 26.2, Fabric loader 0.18.6, Forge 65.1.3 or NeoForge 26.2.0.72, Java 25, Mojang mappings.
+Environment: Minecraft 26.2, Fabric loader 0.19.3, Forge 65.1.3 or NeoForge 26.2.0.72, Java 25, Mojang mappings.
 
 ## Credits
 
