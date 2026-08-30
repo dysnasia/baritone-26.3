@@ -24,19 +24,13 @@ All this fork adds is the port to Minecraft 26.2 and the elytra changes listed u
 [wagyourtail/baritone](https://github.com/wagyourtail/baritone) and
 [MeteorDevelopment/baritone](https://github.com/MeteorDevelopment/baritone), and lives on the `26.2` branch.
 
-Send your stars, sponsorship and thanks upstream to cabaletta/baritone. If you want supported, actively
-maintained Baritone, use upstream instead of this fork.
+Send your stars, sponsorship and thanks upstream to cabaletta/baritone.
 
 ## Download
 
 Grab the latest build from the [Releases page](https://github.com/dysnasia/baritone-26.2/releases/latest) and drop
 it into your `mods` folder: `baritone-fabric-26.2.jar` for Fabric (alongside Fabric API),
 `baritone-forge-26.2.jar` for Forge, or `baritone-neoforge-26.2.jar` for NeoForge.
-
-## Fixes on this branch
-
-- Pathing visuals and path lines
-- Elytra flight (details below)
 
 ## What's different in this fork
 
