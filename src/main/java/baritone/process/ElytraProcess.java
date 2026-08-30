@@ -345,13 +345,21 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
     @Override
     public void pathTo(Goal iGoal) {
+        final int minY = ctx.world().dimensionType().minY();
+        final int maxY = minY + ctx.world().dimensionType().height();
         final int x;
         final int y;
         final int z;
         if (iGoal instanceof GoalXZ) {
             GoalXZ goal = (GoalXZ) iGoal;
             x = goal.getX();
-            y = 64;
+            // y=64 is the Nether's mid-air cruising altitude, but in the overworld it is normally inside
+            // stone or underwater. A destination buried in terrain can never be raytraced to, so the vanilla
+            // planner could never confirm arrival and every recalculation failed. Aim for open air instead
+            // and let the landing logic pick the actual touchdown spot.
+            y = ctx.world().dimension() == Level.NETHER
+                    ? 64
+                    : Math.min(maxY - 8, Math.max(ctx.world().getSeaLevel() + 80, ctx.playerFeet().y));
             z = goal.getZ();
         } else if (iGoal instanceof GoalBlock) {
             GoalBlock goal = (GoalBlock) iGoal;
@@ -361,8 +369,6 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         } else {
             throw new IllegalArgumentException("The goal must be a GoalXZ or GoalBlock");
         }
-        final int minY = ctx.world().dimensionType().minY();
-        final int maxY = minY + ctx.world().dimensionType().height();
         if (y <= minY || y >= maxY) {
             throw new IllegalArgumentException("The y of the goal is not between " + minY + " and " + maxY);
         }

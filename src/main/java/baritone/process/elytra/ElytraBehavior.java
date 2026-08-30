@@ -143,15 +143,34 @@ public final class ElytraBehavior implements Helper {
                 : new VanillaElytraContext(this.ctx);
     }
 
+    /** Minimum spacing between attempts to extend an unfinished path. */
+    private static final int EXTEND_SEGMENT_INTERVAL_TICKS = 20;
+    /** Extend an unfinished path once its tail is within this distance, squared. */
+    private static final double EXTEND_SEGMENT_RADIUS_SQ = 256 * 256;
+    /** ...or once the player is within this many path nodes of the tail, whichever comes first. */
+    private static final int EXTEND_SEGMENT_NODE_MARGIN = 8;
+
     public final class PathManager {
 
         public NetherPath path;
-        private boolean completePath;
-        private boolean recalculating;
+        private volatile boolean completePath;
+        private volatile boolean recalculating;
 
         private int maxPlayerNear;
         private int ticksNearUnchanged;
         private int playerNear;
+
+        /**
+         * Failure back-off. A path calculation that fails is not, on its own, a reason to try again
+         * immediately: the inputs are usually identical on the next tick, so the failure is too, and the
+         * retry is pure waste that also produces one chat line per tick. These fields make failure something
+         * that participates in the decision to retry, rather than a side effect that changes nothing.
+         */
+        private int failureBackoffTicks;
+        private int consecutiveFailures;
+        private long lastFailureLogMs;
+        /** Ticks until {@link #attemptNextSegment()} may extend an unfinished path again. */
+        private int nextSegmentCooldown;
 
         public PathManager() {
             // lol imagine initializing fields normally
@@ -168,6 +187,13 @@ public final class ElytraBehavior implements Helper {
                 this.ticksNearUnchanged++;
             } else {
                 this.ticksNearUnchanged = 0;
+            }
+
+            if (this.failureBackoffTicks > 0) {
+                this.failureBackoffTicks--;
+            }
+            if (this.nextSegmentCooldown > 0) {
+                this.nextSegmentCooldown--;
             }
 
             // Obstacles are more important than an incomplete path, handle those first.
@@ -190,17 +216,37 @@ public final class ElytraBehavior implements Helper {
                             logVerbose(String.format("Computed segment (Next %.1f blocks in %.4f seconds)", distance, (System.nanoTime() - start) / 1e9d));
                         }
                     })
-                    .whenComplete((result, ex) -> {
+                    .whenCompleteAsync((result, ex) -> {
                         this.recalculating = false;
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logDirect("Failed to compute path to destination");
+                                this.onPathFailure("Failed to compute path to destination");
                             } else {
                                 logUnhandledException(cause);
                             }
                         }
-                    });
+                    }, ctx.minecraft()::execute);
+        }
+
+        /**
+         * Records a failed path calculation and reports it at most once per five seconds. Both halves matter:
+         * without the back-off a deterministic failure re-runs a full search every tick forever, and without
+         * the log throttle it prints one chat line per tick while doing so.
+         */
+        private void onPathFailure(final String message) {
+            this.consecutiveFailures++;
+            this.failureBackoffTicks = Math.min(20 << Math.min(this.consecutiveFailures, 4), 200);
+
+            final long now = System.currentTimeMillis();
+            if (this.consecutiveFailures == 1 || now - this.lastFailureLogMs > 5000L) {
+                this.lastFailureLogMs = now;
+                logDirect(this.consecutiveFailures == 1
+                        ? message
+                        : message + " (x" + this.consecutiveFailures + ")");
+            } else {
+                logVerbose(message);
+            }
         }
 
         public CompletableFuture<Void> pathRecalcSegment(final OptionalInt upToIncl) {
@@ -213,17 +259,17 @@ public final class ElytraBehavior implements Helper {
             final boolean complete = this.completePath;
 
             return this.path0(ctx.playerFeet(), upToIncl.isPresent() ? this.path.get(upToIncl.getAsInt()) : ElytraBehavior.this.destination, segment -> segment.append(after.stream(), complete || (segment.isFinished() && !upToIncl.isPresent())))
-                    .whenComplete((result, ex) -> {
+                    .whenCompleteAsync((result, ex) -> {
                         this.recalculating = false;
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logDirect("Failed to recompute segment");
+                                this.onPathFailure("Failed to recompute segment");
                             } else {
                                 logUnhandledException(cause);
                             }
                         }
-                    });
+                    }, ctx.minecraft()::execute);
         }
 
         public void pathNextSegment(final int afterIncl) {
@@ -247,12 +293,12 @@ public final class ElytraBehavior implements Helper {
                             logVerbose(String.format("Computed segment (Next %.1f blocks in %.4f seconds)", distance, (System.nanoTime() - start) / 1e9d));
                         }
                     })
-                    .whenComplete((result, ex) -> {
+                    .whenCompleteAsync((result, ex) -> {
                         this.recalculating = false;
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logDirect("Failed to compute next segment");
+                                this.onPathFailure("Failed to compute next segment");
                                 if (pathStart.distToCenterSqr(ctx.player().position()) < 16 * 16) {
                                     logVerbose("Player is near the segment start, therefore repeating this calculation is pointless. Marking as complete");
                                     completePath = true;
@@ -261,7 +307,7 @@ public final class ElytraBehavior implements Helper {
                                 logUnhandledException(cause);
                             }
                         }
-                    });
+                    }, ctx.minecraft()::execute);
         }
 
         public void clear() {
@@ -271,11 +317,17 @@ public final class ElytraBehavior implements Helper {
             this.playerNear = 0;
             this.ticksNearUnchanged = 0;
             this.maxPlayerNear = 0;
+            this.failureBackoffTicks = 0;
+            this.consecutiveFailures = 0;
+            this.nextSegmentCooldown = 0;
         }
 
         private void setPath(final UnpackedSegment segment) {
             List<BetterBlockPos> path = segment.collect();
-            if (ElytraBehavior.this.appendDestination) {
+            // Only a segment that actually reaches the destination can be asked to land at it. On a partial
+            // segment the last point is wherever the planner ran out of loaded world, so testing it against
+            // the destination would condemn a perfectly good landing spot.
+            if (ElytraBehavior.this.appendDestination && segment.isFinished()) {
                 BlockPos dest = ElytraBehavior.this.destination;
                 BlockPos last = !path.isEmpty() ? path.get(path.size() - 1) : null;
                 if (last != null && ElytraBehavior.this.clearView(Vec3.atLowerCornerOf(dest), Vec3.atLowerCornerOf(last), false)) {
@@ -290,6 +342,8 @@ public final class ElytraBehavior implements Helper {
             this.playerNear = 0;
             this.ticksNearUnchanged = 0;
             this.maxPlayerNear = 0;
+            this.consecutiveFailures = 0;
+            this.failureBackoffTicks = 0;
         }
 
         public NetherPath getPath() {
@@ -308,7 +362,7 @@ public final class ElytraBehavior implements Helper {
         }
 
         private void pathfindAroundObstacles() {
-            if (this.recalculating) {
+            if (this.recalculating || this.failureBackoffTicks > 0) {
                 return;
             }
 
@@ -339,7 +393,7 @@ public final class ElytraBehavior implements Helper {
 
             boolean canSeeAny = false;
             for (int i = rangeStartIncl; i < rangeEndExcl - 1; i++) {
-                if (ElytraBehavior.this.clearView(ctx.playerFeetAsVec(), this.path.getVec(i), false) || ElytraBehavior.this.clearView(ctx.playerHead(), this.path.getVec(i), false)) {
+                if (!canSeeAny && (ElytraBehavior.this.clearView(ctx.playerFeetAsVec(), this.path.getVec(i), false) || ElytraBehavior.this.clearView(ctx.playerHead(), this.path.getVec(i), false))) {
                     canSeeAny = true;
                 }
                 if (!ElytraBehavior.this.clearView(this.path.getVec(i), this.path.getVec(i + 1), false)) {
@@ -375,14 +429,23 @@ public final class ElytraBehavior implements Helper {
         }
 
         private void attemptNextSegment() {
-            if (this.recalculating) {
+            if (this.recalculating || this.failureBackoffTicks > 0 || this.nextSegmentCooldown > 0) {
                 return;
             }
 
             final int last = this.path.size() - 1;
-            if (!this.completePath && ctx.world().isLoaded(this.path.get(last))) {
-                this.pathNextSegment(last);
+            if (this.completePath || !ctx.world().isLoaded(this.path.get(last))) {
+                return;
             }
+            // A backend with no terrain prediction always stops at the edge of the loaded world, so the tail
+            // of an unfinished path is loaded by definition and this would otherwise fire every single tick.
+            // Extend it as the tail comes within reach instead, and rate limit regardless.
+            this.nextSegmentCooldown = EXTEND_SEGMENT_INTERVAL_TICKS;
+            if (this.playerNear < last - EXTEND_SEGMENT_NODE_MARGIN
+                    && ctx.playerFeet().distanceSq(this.path.get(last)) > EXTEND_SEGMENT_RADIUS_SQ) {
+                return;
+            }
+            this.pathNextSegment(last);
         }
 
         public void updatePlayerNear() {
