@@ -21,8 +21,12 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class BlockUtils {
 
@@ -42,6 +46,15 @@ public class BlockUtils {
         Block block = stringToBlockNullable(name);
 
         if (block == null) {
+            List<Block> candidates = name.contains(":") ? Collections.emptyList() : blocksByPath(name);
+            if (candidates.size() > 1) {
+                throw new IllegalArgumentException(String.format(
+                        "Ambiguous block name %s, %d mods provide it: %s",
+                        name,
+                        candidates.size(),
+                        candidates.stream().map(BlockUtils::blockToString).collect(Collectors.joining(", "))
+                ));
+            }
             throw new IllegalArgumentException(String.format("Invalid block name %s", name));
         }
 
@@ -58,10 +71,33 @@ public class BlockUtils {
             return null; // cached as null
         }
         block = BuiltInRegistries.BLOCK.getOptional(Identifier.tryParse(name.contains(":") ? name : "minecraft:" + name)).orElse(null);
+        if (block == null && !name.contains(":")) {
+            // In a modpack players type the block name they see in-game, not the mod id that happens to own it.
+            // If the bare name isn't vanilla, accept it when exactly one mod claims that path. Ambiguity stays an
+            // error rather than a coin flip -- stringToBlockRequired turns it into a message listing the candidates.
+            List<Block> candidates = blocksByPath(name);
+            if (candidates.size() == 1) {
+                block = candidates.get(0);
+            }
+        }
         Map<String, Block> copy = new HashMap<>(resourceCache); // read only copy is safe, wont throw concurrentmodification
         copy.put(name, block);
         resourceCache = copy;
         return block;
+    }
+
+    /**
+     * @param path The path of a block id, i.e. everything after the {@code modid:}
+     * @return Every registered block whose id has that path, in any namespace
+     */
+    public static List<Block> blocksByPath(String path) {
+        List<Block> found = new ArrayList<>();
+        for (Identifier id : BuiltInRegistries.BLOCK.keySet()) {
+            if (id.getPath().equals(path)) {
+                BuiltInRegistries.BLOCK.getOptional(id).ifPresent(found::add);
+            }
+        }
+        return found;
     }
 
     private BlockUtils() {}

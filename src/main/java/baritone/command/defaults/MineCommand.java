@@ -60,7 +60,7 @@ public class MineCommand extends Command {
 
     @Override
     public String getShortDesc() {
-        return "Mine some blocks";
+        return "Mine blocks, optionally stopping after a given count";
     }
 
     @Override
@@ -68,12 +68,17 @@ public class MineCommand extends Command {
         return Arrays.asList(
                 "The mine command allows you to tell Baritone to search for and mine individual blocks.",
                 "",
-                "The specified blocks can be ores, or any other block.",
+                "The specified blocks can be ores, or any other block. A block from a mod can be named either in full,",
+                "as modid:block, or by its name alone as long as only one mod provides it.",
                 "",
-                "Also see the legitMine settings (see #set l legitMine).",
+                "An optional count may be given before the block names. Baritone then stops after breaking that many",
+                "matching blocks, no matter how many items those blocks drop.",
+                "",
+                "Also see the legitMine setting (see #set l legitMine).",
                 "",
                 "Usage:",
-                "> mine diamond_ore - Mines all diamonds it can find."
+                "> mine diamond_ore - Mines every diamond ore it can find.",
+                "> mine 64 diamond_ore - Breaks 64 diamond ore blocks and then stops."
         );
     }
 }

@@ -29,12 +29,12 @@ import baritone.cache.CachedChunk;
 import baritone.pathing.movement.CalculationContext;
 import baritone.pathing.movement.MovementHelper;
 import baritone.utils.BaritoneProcessHelper;
+import baritone.utils.BlockBreakHelper;
 import baritone.utils.BlockStateInterface;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.AirBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -53,13 +53,23 @@ import static baritone.api.pathing.movement.ActionCosts.COST_INF;
  */
 public final class MineProcess extends BaritoneProcessHelper implements IMineProcess {
 
-    private BlockOptionalMetaLookup filter;
+    // rescan runs on another thread and can cancel the process, which reassigns filter, desiredQuantity and
+    // blocksMined while the client thread is reading them
+    private volatile BlockOptionalMetaLookup filter;
     private List<BlockPos> knownOreLocations;
     private List<BlockPos> blacklist; // inaccessible
     private Map<BlockPos, Long> anticipatedDrops;
+    /** How many matching blocks we have broken since this mine command started */
+    private volatile int blocksMined;
+    /**
+     * Set by the rescan thread when it decides there is nothing left to mine. Stopping has to release the left click
+     * as well, which is the game's own state and must only be touched from a tick, so the tick picks this up rather
+     * than the rescan stopping us itself.
+     */
+    private volatile boolean cancelRequested;
     private BlockPos branchPoint;
     private GoalRunAway branchPointRunaway;
-    private int desiredQuantity;
+    private volatile int desiredQuantity;
     private int tickCount;
 
     public MineProcess(Baritone baritone) {
@@ -73,15 +83,20 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
 
     @Override
     public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
-        if (desiredQuantity > 0) {
-            int curr = ctx.player().getInventory().getNonEquipmentItems().stream()
-                    .filter(stack -> filter.has(stack))
-                    .mapToInt(ItemStack::getCount).sum();
-            if (curr >= desiredQuantity) {
-                logDirect("Have " + curr + " valid items");
-                cancel();
-                return null;
-            }
+        updateMinedCount();
+        if (desiredQuantity > 0 && blocksMined >= desiredQuantity) {
+            // Count the blocks we broke, not the items we ended up holding. What a block drops is a property of the
+            // pack, not of the request: "mine 64 of it" means 64 of the block, whether each one yields nothing, one
+            // item, or nine.
+            logDirect("Mined " + blocksMined + " blocks");
+            stopMining();
+            return null;
+        }
+        // After the quantity check, so that finishing the job is reported as finishing the job even if a rescan
+        // decided in the same tick that there was nothing left to mine.
+        if (cancelRequested) {
+            stopMining();
+            return null;
         }
         if (calcFailed) {
             if (!knownOreLocations.isEmpty() && Baritone.settings().blacklistClosestOnFailure.value) {
@@ -96,7 +111,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
                 if (Baritone.settings().notificationOnMineFail.value) {
                     logNotification("Unable to find any path to " + filter + ", canceling mine", true);
                 }
-                cancel();
+                stopMining();
                 return null;
             }
         }
@@ -110,7 +125,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         }
         if (Baritone.settings().legitMine.value) {
             if (!addNearby()) {
-                cancel();
+                stopMining();
                 return null;
             }
         }
@@ -139,7 +154,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         if (command == null) {
             // none in range
             // maybe say something in chat? (ahem impact)
-            cancel();
+            stopMining();
             return null;
         }
         return command;
@@ -163,9 +178,43 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         anticipatedDrops = copy;
     }
 
+    /**
+     * Counts the blocks we have broken since the last tick. Only blocks this Baritone instance actually broke are
+     * counted, so nothing another player, an explosion or a falling block does can be mistaken for progress.
+     */
+    private void updateMinedCount() {
+        // Always drain, even when there is nothing to count against, so that blocks broken while we weren't looking
+        // can't pile up and be attributed to a later command.
+        List<BlockBreakHelper.BrokenBlock> broken = baritone.getInputOverrideHandler().getBlockBreakHelper().drainBrokenBlocks();
+        if (broken.isEmpty()) {
+            return;
+        }
+        BlockOptionalMetaLookup filter = filterFilter();
+        if (filter == null) {
+            return;
+        }
+        for (BlockBreakHelper.BrokenBlock block : broken) {
+            if (filter.has(block.state())) {
+                blocksMined++;
+            }
+        }
+    }
+
     @Override
     public void onLostControl() {
         mine(0, (BlockOptionalMetaLookup) null);
+    }
+
+    /**
+     * Stops mining and lets go of the left click. Returning null from {@link #onTick} skips the clearAllKeys further
+     * down, and if the path had already finished nothing else clears the keys either, which would leave the click
+     * forced down and the bot quietly mining past the number of blocks it was asked for. Only call this from a tick:
+     * these touch the game's own state, so they have no business running on the pathing thread.
+     */
+    private void stopMining() {
+        baritone.getInputOverrideHandler().clearAllKeys();
+        baritone.getInputOverrideHandler().getBlockBreakHelper().stopBreakingBlock();
+        cancel();
     }
 
     @Override
@@ -239,7 +288,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
             if (Baritone.settings().notificationOnMineFail.value) {
                 logNotification("No locations for " + filter + " known, cancelling", true);
             }
-            cancel();
+            cancelRequested = true;
             return;
         }
         knownOreLocations = locs;
@@ -504,16 +553,21 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
 
     @Override
     public void mine(int quantity, BlockOptionalMetaLookup filter) {
-        this.filter = filter;
-        if (this.filterFilter() == null) {
-            this.filter = null;
-        }
+        // isActive() keys on filter, so everything a tick would read has to be in place before filter is assigned,
+        // or a tick racing a mine() call from the rescan thread sees the previous command's counters.
         this.desiredQuantity = quantity;
         this.knownOreLocations = new ArrayList<>();
         this.blacklist = new ArrayList<>();
         this.branchPoint = null;
         this.branchPointRunaway = null;
         this.anticipatedDrops = new HashMap<>();
+        this.blocksMined = 0;
+        this.cancelRequested = false;
+        baritone.getInputOverrideHandler().getBlockBreakHelper().forgetBrokenBlocks();
+        this.filter = filter;
+        if (this.filterFilter() == null) {
+            this.filter = null;
+        }
         if (filter != null) {
             rescan(new ArrayList<>(), new CalculationContext(baritone));
         }

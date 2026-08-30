@@ -222,6 +222,38 @@ public class TabCompleteHelper {
     }
 
     /**
+     * Filter out any element that doesn't start with {@code prefix} and return this object for chaining
+     * <p>
+     * Assumes every element in this {@link TabCompleteHelper} is a {@link Identifier}
+     * <p>
+     * Unlike {@link #filterPrefixNamespaced(String)}, a prefix with no namespace is also matched against the path on
+     * its own, so a block from a mod shows up under the name the player actually knows it by instead of only under
+     * "modid:". Without this, everything a modpack adds is invisible to tab completion until you already know which
+     * mod owns it.
+     *
+     * @param prefix The prefix to filter for
+     * @return This object
+     * @see #filterPrefixNamespaced(String)
+     */
+    public TabCompleteHelper filterPrefixNamespacedOrPath(String prefix) {
+        if (prefix.contains(":")) {
+            return filterPrefixNamespaced(prefix);
+        }
+        String lower = prefix.toLowerCase(Locale.US);
+        return filter(x -> {
+            String element = x.toLowerCase(Locale.US);
+            int colon = element.indexOf(':');
+            if (colon == -1) {
+                return element.startsWith(lower);
+            }
+            // Match the path, or the namespace but only once it has been typed in full. Matching a partial namespace
+            // as well would mean that two letters of a mod id offer every block that mod adds, which in a large pack
+            // is thousands of suggestions rebuilt on each keystroke.
+            return element.startsWith(lower, colon + 1) || (colon == lower.length() && element.startsWith(lower));
+        });
+    }
+
+    /**
      * @return An array containing every element in this {@link TabCompleteHelper}
      * @see #stream()
      */

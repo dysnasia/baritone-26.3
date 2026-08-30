@@ -21,12 +21,34 @@ import baritone.api.command.argument.ICommandArgument;
 
 public class CommandInvalidTypeException extends CommandInvalidArgumentException {
 
+    /** Long enough for a list of a few mods, short enough to still read as one chat line */
+    private static final int MAX_REASON_LENGTH = 200;
+
     public CommandInvalidTypeException(ICommandArgument arg, String expected) {
         super(arg, String.format("Expected %s", expected));
     }
 
     public CommandInvalidTypeException(ICommandArgument arg, String expected, Throwable cause) {
-        super(arg, String.format("Expected %s", expected), cause);
+        // Include what actually went wrong. Without this the only thing a player sees is the name of the parser that
+        // rejected their argument, which hides messages that were written specifically for them, such as the list of
+        // mods providing a block name that more than one mod claims.
+        super(arg, String.format("Expected %s%s", expected, reason(cause)), cause);
+    }
+
+    /**
+     * Only an {@link IllegalArgumentException} is treated as something worth showing: those carry a message written
+     * for whoever typed the command. Anything else is a failure inside Baritone, whose message would be noise here
+     * and is available through the verboseCommandExceptions setting instead.
+     */
+    private static String reason(Throwable cause) {
+        if (!(cause instanceof IllegalArgumentException) || cause.getMessage() == null) {
+            return "";
+        }
+        String message = cause.getMessage().replace('\u00a7', '&');
+        if (message.length() > MAX_REASON_LENGTH) {
+            message = message.substring(0, MAX_REASON_LENGTH) + "...";
+        }
+        return ": " + message;
     }
 
     public CommandInvalidTypeException(ICommandArgument arg, String expected, String got) {

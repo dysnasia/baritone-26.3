@@ -20,8 +20,7 @@ package baritone.api.command.datatypes;
 import baritone.api.command.exception.CommandException;
 import baritone.api.command.helpers.TabCompleteHelper;
 import baritone.api.utils.BlockOptionalMeta;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
+import baritone.api.utils.BlockUtils;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.properties.Property;
 
@@ -77,7 +76,8 @@ public enum ForBlockOptionalMeta implements IDatatypeFor<BlockOptionalMeta> {
             properties = parts[1];
         }
 
-        Block block = BuiltInRegistries.BLOCK.getOptional(Identifier.parse(blockId)).orElse(null);
+        // Resolves unqualified names against modded namespaces as well, matching what the command itself accepts.
+        Block block = BlockUtils.stringToBlockNullable(blockId);
         if (block == null) {
             // This block doesn't exist so there's no properties to complete.
             return Stream.empty();

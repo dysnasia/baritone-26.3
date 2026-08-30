@@ -30,6 +30,8 @@ import net.minecraft.resources.RegistryDataLoader;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.RegistryLayer;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.ReloadableServerRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.packs.PackType;
@@ -39,6 +41,7 @@ import net.minecraft.server.packs.resources.CloseableResourceManager;
 import net.minecraft.server.packs.resources.MultiPackResourceManager;
 import net.minecraft.tags.TagLoader;
 import net.minecraft.world.flag.FeatureFlagSet;
+import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -60,6 +63,7 @@ import sun.misc.Unsafe;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
@@ -80,6 +84,9 @@ public final class BlockOptionalMeta {
     private final ImmutableSet<Integer> stateHashes;
     private final ImmutableSet<Integer> stackHashes;
     private static Map<Block, List<Item>> drops = new HashMap<>();
+    private static WeakReference<Object> dropsSource;
+    /** Stands in for "not attached to anything", so that it can't be confused with a collected weak referent */
+    private static final Object NO_DROPS_SOURCE = new Object();
 
     public BlockOptionalMeta(@Nonnull Block block) {
         this.block = block;
@@ -222,44 +229,69 @@ public final class BlockOptionalMeta {
     }
 
     private static synchronized List<Item> drops(Block b) {
+        // Which loot tables we can see depends on what we're attached to, so a cache built against one world is
+        // worthless in the next. Joining a modpack world after computing drops in the main menu used to leave every
+        // block permanently cached as dropping nothing. Key on the connection rather than the server, because two
+        // different remote servers both have no integrated server and would otherwise share one cache. Hold the key
+        // weakly so that a cache entry can't keep a whole finished server or connection alive.
+        MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+        // The integrated server builds a new holder every time datapacks are reloaded, so keying on it rather than on
+        // the server itself means "/reload" invalidates the cache too.
+        Object source = server != null ? server.reloadableRegistries() : Minecraft.getInstance().getConnection();
+        if (source == null) {
+            source = NO_DROPS_SOURCE;
+        }
+        if (dropsSource == null || dropsSource.get() != source) {
+            drops = new HashMap<>();
+            dropsSource = new WeakReference<>(source);
+        }
         return drops.computeIfAbsent(b, block -> {
             Optional<ResourceKey<LootTable>> optionalLootTableKey = block.getLootTable();
             if (optionalLootTableKey.isEmpty()) {
                 return Collections.emptyList();
-            } else {
-                List<Item> items = new ArrayList<>();
-                try {
-                    ServerLevel lv2 = ServerLevelStub.fastCreate();
-
-                    LootParams.Builder lv5 = new LootParams.Builder(lv2)
-                        .withParameter(LootContextParams.ORIGIN, Vec3.ZERO)
-                        .withParameter(LootContextParams.BLOCK_STATE, b.defaultBlockState())
-                        .withParameter(LootContextParams.TOOL, new ItemStack(Items.NETHERITE_PICKAXE, 1));
-                    getDrops(block, lv5).stream().map(ItemStack::getItem).forEach(items::add);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-                return items;
             }
+            List<Item> items = new ArrayList<>();
+            try {
+                ServerLevelStub level = ServerLevelStub.fastCreate();
+                Optional<LootTable> registered = level.holder().lookup()
+                        .lookup(Registries.LOOT_TABLE)
+                        .flatMap(registry -> registry.get(optionalLootTableKey.get()))
+                        .map(Holder::value);
+                if (registered.isEmpty()) {
+                    // The block names a loot table that isn't registered at all. Either we're on a remote server,
+                    // where loot tables are server data and never reach the client, or a mod defines its drops in
+                    // code and ships no table. Assume the block drops itself: right for most modded blocks, and far
+                    // better than knowing nothing, which stops Baritone recognising and collecting what it just
+                    // mined. A table that does exist and yields nothing is a real answer and is kept as-is.
+                    Item self = block.asItem();
+                    return self == Items.AIR ? Collections.emptyList() : Collections.singletonList(self);
+                }
+                LootTable table = registered.get();
+                LootParams params = new LootParams.Builder(level)
+                        .withParameter(LootContextParams.ORIGIN, Vec3.ZERO)
+                        .withParameter(LootContextParams.BLOCK_STATE, block.defaultBlockState())
+                        .withParameter(LootContextParams.TOOL, new ItemStack(Items.NETHERITE_PICKAXE, 1))
+                        .create(LootContextParamSets.BLOCK);
+                ((ILootTable) table)
+                        .invokeGetRandomItems(new LootContext.Builder(params).withOptionalRandomSeed(1).create(null))
+                        .stream()
+                        .map(ItemStack::getItem)
+                        .forEach(items::add);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return items;
         });
     }
 
-    private static List<ItemStack> getDrops(Block state, LootParams.Builder params) {
-        Optional<ResourceKey<LootTable>> lv = state.getLootTable();
-        if (lv.isEmpty()) {
-            return Collections.emptyList();
-        } else {
-            LootParams lv2 = params.withParameter(LootContextParams.BLOCK_STATE, state.defaultBlockState()).create(LootContextParamSets.BLOCK);
-            ServerLevelStub lv3 = (ServerLevelStub) lv2.getLevel();
-            LootTable lv4 = lv3.holder().getLootTable(lv.get());
-            return((ILootTable) lv4).invokeGetRandomItems(new LootContext.Builder(lv2).withOptionalRandomSeed(1).create(null));
-        }
-    }
-
     public static class ServerLevelStub extends ServerLevel {
-        private static Minecraft client = Minecraft.getInstance();
         private static Unsafe unsafe = getUnsafe();
-        private static CompletableFuture<RegistryAccess> registryAccess = load();
+        /**
+         * Lazily synthesized vanilla-only registries, used only when there is no real server to ask. Building these
+         * is both expensive and, on a modded client, capable of throwing -- so it must not happen eagerly in a static
+         * initializer, or one failure would take the whole drop lookup down with it.
+         */
+        private static CompletableFuture<RegistryAccess> vanillaRegistryAccess;
 
         public ServerLevelStub(MinecraftServer $$0, Executor $$1, LevelStorageSource.LevelStorageAccess $$2, ServerLevelData $$3, ResourceKey<Level> $$4, LevelStem $$5, boolean $$6, long $$7, List<CustomSpawner> $$8, boolean $$9) {
             super($$0, $$1, $$2, $$3, $$4, $$5, $$6, $$7, $$8, $$9);
@@ -267,8 +299,10 @@ public final class BlockOptionalMeta {
 
         @Override
         public FeatureFlagSet enabledFeatures() {
-            assert client.level != null;
-            return client.level.enabledFeatures();
+            // Asserts are off at runtime, so a null level here used to be an NPE swallowed by the caller, which then
+            // cached the block as dropping nothing.
+            Level level = Minecraft.getInstance().level;
+            return level == null ? FeatureFlags.DEFAULT_FLAGS : level.enabledFeatures();
         }
 
         public static ServerLevelStub fastCreate() {
@@ -281,11 +315,32 @@ public final class BlockOptionalMeta {
 
         @Override
         public RegistryAccess registryAccess() {
-            return registryAccess.join();
+            MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+            if (server != null) {
+                return server.registryAccess();
+            }
+            return vanillaRegistryAccess();
         }
 
+        /**
+         * Loot tables are server data. In singleplayer and on a LAN world the integrated server is right here and has
+         * already loaded every datapack the modpack ships, so ask it rather than synthesizing our own -- that's the
+         * only way modded blocks resolve to their real drops. Falling back to vanilla-only registries is correct for a
+         * remote server, where the client never receives the datapacks at all.
+         */
         public ReloadableServerRegistries.Holder holder() {
-            return new ReloadableServerRegistries.Holder(registryAccess().freeze());
+            MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+            if (server != null) {
+                return server.reloadableRegistries();
+            }
+            return new ReloadableServerRegistries.Holder(vanillaRegistryAccess().freeze());
+        }
+
+        private static synchronized RegistryAccess vanillaRegistryAccess() {
+            if (vanillaRegistryAccess == null) {
+                vanillaRegistryAccess = load();
+            }
+            return vanillaRegistryAccess.join();
         }
 
         public static Unsafe getUnsafe() {

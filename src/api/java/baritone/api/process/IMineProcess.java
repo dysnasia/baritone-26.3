@@ -29,27 +29,25 @@ import net.minecraft.world.level.block.Block;
 public interface IMineProcess extends IBaritoneProcess {
 
     /**
-     * Begin to search for and mine the specified blocks until
-     * the number of specified items to get from the blocks that
-     * are mined.
+     * Begins searching for and mining the specified blocks, stopping once the given number of matching blocks has
+     * been broken. What those blocks drop does not affect the count.
      *
-     * @param quantity The total number of items to get
+     * @param quantity The number of matching blocks to break, or zero or less for no limit
      * @param blocks   The blocks to mine
      */
     void mineByName(int quantity, String... blocks);
 
     /**
-     * Begin to search for and mine the specified blocks until
-     * the number of specified items to get from the blocks that
-     * are mined. This is based on the first target block to mine.
+     * Begins searching for and mining the blocks matched by the given filter, stopping once the given number of
+     * matching blocks has been broken. What those blocks drop does not affect the count.
      *
-     * @param quantity The number of items to get from blocks mined
-     * @param filter   The blocks to mine
+     * @param quantity The number of matching blocks to break, or zero or less for no limit
+     * @param filter   The blocks to mine, or {@code null} to stop mining
      */
     void mine(int quantity, BlockOptionalMetaLookup filter);
 
     /**
-     * Begin to search for and mine the specified blocks.
+     * Begins searching for and mining the specified blocks. Mining continues until cancelled, with no block limit.
      *
      * @param filter The blocks to mine
      */
@@ -58,7 +56,7 @@ public interface IMineProcess extends IBaritoneProcess {
     }
 
     /**
-     * Begin to search for and mine the specified blocks.
+     * Begins searching for and mining the specified blocks. Mining continues until cancelled, with no block limit.
      *
      * @param blocks The blocks to mine
      */
@@ -67,16 +65,18 @@ public interface IMineProcess extends IBaritoneProcess {
     }
 
     /**
-     * Begin to search for and mine the specified blocks.
+     * Begins searching for and mining the specified blocks, stopping once the given number of matching blocks has
+     * been broken.
      *
-     * @param boms The blocks to mine
+     * @param quantity The number of matching blocks to break, or zero or less for no limit
+     * @param boms     The blocks to mine
      */
     default void mine(int quantity, BlockOptionalMeta... boms) {
         mine(quantity, new BlockOptionalMetaLookup(boms));
     }
 
     /**
-     * Begin to search for and mine the specified blocks.
+     * Begins searching for and mining the specified blocks. Mining continues until cancelled, with no block limit.
      *
      * @param boms The blocks to mine
      */
@@ -85,9 +85,10 @@ public interface IMineProcess extends IBaritoneProcess {
     }
 
     /**
-     * Begin to search for and mine the specified blocks.
+     * Begins searching for and mining the specified blocks, stopping once the given number of matching blocks has
+     * been broken.
      *
-     * @param quantity The total number of items to get
+     * @param quantity The number of matching blocks to break, or zero or less for no limit
      * @param blocks   The blocks to mine
      */
     default void mine(int quantity, Block... blocks) {
@@ -99,7 +100,7 @@ public interface IMineProcess extends IBaritoneProcess {
     }
 
     /**
-     * Begin to search for and mine the specified blocks.
+     * Begins searching for and mining the specified blocks. Mining continues until cancelled, with no block limit.
      *
      * @param blocks The blocks to mine
      */

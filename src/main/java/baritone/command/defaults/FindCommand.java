@@ -95,7 +95,7 @@ public class FindCommand extends Command {
                                 .map(BuiltInRegistries.BLOCK::getKey)
                                 .map(Object::toString)
                 )
-                .filterPrefixNamespaced(args.getString())
+                .filterPrefixNamespacedOrPath(args.getString())
                 .sortAlphabetically()
                 .stream();
     }

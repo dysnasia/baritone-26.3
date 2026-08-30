@@ -19,10 +19,12 @@ package baritone.api.command.datatypes;
 
 import baritone.api.command.exception.CommandException;
 import baritone.api.command.helpers.TabCompleteHelper;
+import baritone.api.utils.BlockUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.stream.Stream;
 
 public enum BlockById implements IDatatypeFor<Block> {
@@ -30,26 +32,50 @@ public enum BlockById implements IDatatypeFor<Block> {
 
     @Override
     public Block get(IDatatypeContext ctx) throws CommandException {
-        Identifier id = Identifier.parse(ctx.getConsumer().getString());
-        Block block;
-        if ((block = BuiltInRegistries.BLOCK.getOptional(id).orElse(null)) == null) {
-            throw new IllegalArgumentException("no block found by that id");
-        }
-        return block;
+        // BlockUtils resolves an unqualified name against modded namespaces too, so that a modpack block can be
+        // named the same way a vanilla one is.
+        return BlockUtils.stringToBlockRequired(ctx.getConsumer().getString());
     }
+
+    /**
+     * Every block id as a string. The registry is frozen once mods have loaded, so this is built once rather than on
+     * every keystroke -- in a large modpack that is twenty thousand strings per character typed.
+     */
+    private static volatile List<String> blockIds;
+
+    /**
+     * How many suggestions to offer. The completion popup shows ten, and sorting every block in a modpack to display
+     * ten of them is work nobody sees.
+     */
+    private static final int MAX_SUGGESTIONS = 64;
 
     @Override
     public Stream<String> tabComplete(IDatatypeContext ctx) throws CommandException {
         String arg = ctx.getConsumer().getString();
 
         return new TabCompleteHelper()
-                .append(
-                        BuiltInRegistries.BLOCK.keySet()
-                                .stream()
-                                .map(Object::toString)
-                )
-                .filterPrefixNamespaced(arg)
-                .sortAlphabetically()
-                .stream();
+                .append(blockIds().stream())
+                .filterPrefixNamespacedOrPath(arg)
+                // Order by the name the player is actually typing, so that a mod's block and the vanilla block sit
+                // next to each other instead of the whole of "minecraft:" coming first -- with a capped list, sorting
+                // vanilla first would push every modded block past the cap and out of sight. Vanilla wins only
+                // between two blocks with the same name.
+                .sort(Comparator.comparing((String id) -> id.substring(id.indexOf(':') + 1), String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing(id -> !id.startsWith("minecraft:"))
+                        .thenComparing(String.CASE_INSENSITIVE_ORDER))
+                .stream()
+                .limit(MAX_SUGGESTIONS);
+    }
+
+    private static List<String> blockIds() {
+        List<String> ids = blockIds;
+        if (ids == null) {
+            ids = BuiltInRegistries.BLOCK.keySet()
+                    .stream()
+                    .map(Object::toString)
+                    .toList();
+            blockIds = ids;
+        }
+        return ids;
     }
 }

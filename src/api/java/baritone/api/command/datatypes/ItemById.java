@@ -23,6 +23,8 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.stream.Stream;
 
 public enum ItemById implements IDatatypeFor<Item> {
@@ -38,16 +40,38 @@ public enum ItemById implements IDatatypeFor<Item> {
         return item;
     }
 
+    /**
+     * Every item id as a string. The registry is frozen once mods have loaded, so this is built once rather than on
+     * every keystroke -- in a large modpack that is tens of thousands of strings per character typed.
+     */
+    private static volatile List<String> itemIds;
+
+    /** How many suggestions to offer, matching {@link BlockById} */
+    private static final int MAX_SUGGESTIONS = 64;
+
     @Override
     public Stream<String> tabComplete(IDatatypeContext ctx) throws CommandException {
         return new TabCompleteHelper()
-                .append(
-                        BuiltInRegistries.BLOCK.keySet()
-                                .stream()
-                                .map(Identifier::toString)
-                )
-                .filterPrefixNamespaced(ctx.getConsumer().getString())
-                .sortAlphabetically()
-                .stream();
+                .append(itemIds().stream())
+                .filterPrefixNamespacedOrPath(ctx.getConsumer().getString())
+                // By the name the player is typing, so that a mod's item and the vanilla item sit next to each other
+                // instead of the whole of "minecraft:" coming first and filling the list on its own.
+                .sort(Comparator.comparing((String id) -> id.substring(id.indexOf(':') + 1), String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing(id -> !id.startsWith("minecraft:"))
+                        .thenComparing(String.CASE_INSENSITIVE_ORDER))
+                .stream()
+                .limit(MAX_SUGGESTIONS);
+    }
+
+    private static List<String> itemIds() {
+        List<String> ids = itemIds;
+        if (ids == null) {
+            ids = BuiltInRegistries.ITEM.keySet()
+                    .stream()
+                    .map(Identifier::toString)
+                    .toList();
+            itemIds = ids;
+        }
+        return ids;
     }
 }
