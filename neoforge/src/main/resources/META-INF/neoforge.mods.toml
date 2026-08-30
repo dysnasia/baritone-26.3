@@ -6,7 +6,7 @@
 # The name of the mod loader type to load - for regular FML @Mod mods it should be javafml
 modLoader="javafml" #mandatory
 # A version range to match for said mod loader - for regular FML @Mod it will be the forge version
-loaderVersion="[3,)" #mandatory Matches the javafml version declared by NeoForge 26.2.0.19-beta itself ("[3,]").
+loaderVersion="[3,)" #mandatory Matches the javafml version declared by NeoForge 26.2.0.72 itself ("[3,]").
 license="LGPL-3.0-only"
 # A URL to refer people to when problems occur with this mod
 issueTrackerURL="https://github.com/cabaletta/baritone/issues" #optional
