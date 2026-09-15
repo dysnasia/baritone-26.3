@@ -17,7 +17,7 @@ Modification notice
 This distribution is a MODIFIED version of Baritone, not the original.
 
     Modified during 2025-2026 by dysnasia (https://github.com/dysnasia)
-    Fork:  https://github.com/dysnasia/baritone-26.2
+    Fork:  https://github.com/dysnasia/baritone-26.3
 
 The modifications consist of a port to Minecraft 26.3 / Java 25 / Mojang mappings for the
 Fabric and NeoForge loaders (Forge source is retargeted to 26.3; a Forge 26.3 loader

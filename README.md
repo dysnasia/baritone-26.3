@@ -9,6 +9,12 @@ Minecraft Forge has not published a 26.3 loader yet so that jar is not built. It
 Baritone, the pathfinding mod on its own, installable like any other mod. It does not include
 or bundle Meteor Client.
 
+The repo is named for the current default, Minecraft 26.3. Minecraft versions of this fork live
+on branches [`26.3`](https://github.com/dysnasia/baritone-26.3/tree/26.3) (this README) and
+[`26.2`](https://github.com/dysnasia/baritone-26.3/tree/26.2). Switch the branch for that
+version's source. Jars are on [Releases](https://github.com/dysnasia/baritone-26.3/releases)
+under the matching tag.
+
 Environment: Minecraft 26.3, Java 25, Mojang mappings. Built against Fabric loader 0.19.5 and
 NeoForge 26.3.0.0-beta. The Fabric mod metadata requires Fabric loader 0.19.5 or newer and
 Minecraft 26.3.
@@ -30,7 +36,7 @@ Send your stars, sponsorship and thanks upstream to cabaletta/baritone.
 
 ## Download
 
-Grab the latest build from the [Releases page](https://github.com/dysnasia/baritone-26.2/releases/latest) and drop
+Grab the latest build from the [Releases page](https://github.com/dysnasia/baritone-26.3/releases/latest) and drop
 `baritone-fabric-26.3.jar` or `baritone-neoforge-26.3.jar` into your `mods` folder. Forge 26.3 is not published yet.
 
 ## What's different in this fork

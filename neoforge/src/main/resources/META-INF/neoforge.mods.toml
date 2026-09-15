@@ -9,7 +9,7 @@ modLoader="javafml" #mandatory
 loaderVersion="[3,)" #mandatory Matches the javafml version declared by NeoForge 26.3.0.0-beta itself ("[3,]").
 license="LGPL-3.0-only"
 # A URL to refer people to when problems occur with this mod
-issueTrackerURL="https://github.com/dysnasia/baritone-26.2/issues" #optional
+issueTrackerURL="https://github.com/dysnasia/baritone-26.3/issues" #optional
 # A list of mods - how many allowed here is determined by the individual mod loader
 [[mods]] #mandatory
 # The modid of the mod. This deliberately is NOT "baritone": BaritoneMixinPlugin stands down when a mod with
@@ -20,7 +20,7 @@ version="${version}" #mandatory
  # A display name for the mod
 displayName="Baritone" #mandatory
 # A URL for the "homepage" for this mod, displayed in the mod UI
-displayURL="https://github.com/dysnasia/baritone-26.2" #optional
+displayURL="https://github.com/dysnasia/baritone-26.3" #optional
 # A file name (in the root of the mod JAR) containing a logo for display
 #logoFile="examplemod.png" #optional
 # A text field displayed in the mod UI

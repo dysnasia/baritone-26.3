@@ -7,7 +7,7 @@ Once Baritone is installed, look [here](USAGE.md) for instructions on how to use
 
 ## Prebuilt releases
 
-This fork: [Releases](https://github.com/dysnasia/baritone-26.2/releases). Drop `baritone-fabric-26.3.jar` or `baritone-neoforge-26.3.jar` into `mods`. Forge 26.3 is not published yet.
+This fork: [Releases](https://github.com/dysnasia/baritone-26.3/releases). Drop `baritone-fabric-26.3.jar` or `baritone-neoforge-26.3.jar` into `mods`. Forge 26.3 is not published yet.
 
 This branch is Minecraft **26.3** / Baritone **26.3**, built for Fabric and NeoForge. Upstream's historical mapping (not this fork):
 
@@ -26,7 +26,7 @@ That image is for compiling, not a bit-for-bit match of GitHub release jars.
 
 ## Artifacts
 
-Building Baritone will create the final artifacts in the ``dist`` directory. These are the same as the artifacts created in the [releases](https://github.com/dysnasia/baritone-26.2/releases).
+Building Baritone will create the final artifacts in the ``dist`` directory. These are the same as the artifacts created in the [releases](https://github.com/dysnasia/baritone-26.3/releases).
 
 **The Fabric and NeoForge releases can simply be added as mods for that loader.** Forge 26.3 is not published yet; `forge/` is retargeted. When a 26.3 Forge artifact exists, add `forge` to `available_loaders` in `gradle.properties` and set `forge_version` to that loader.
 
