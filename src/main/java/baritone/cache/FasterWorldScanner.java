@@ -34,6 +34,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.*;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -122,17 +123,32 @@ public enum FasterWorldScanner implements IWorldScanner {
         return chunks;
     }
 
+    // Sorts in place only when truncating. Copy the prefix so the discarded tail is not retained via subList.
+    static List<BlockPos> takeClosest(List<BlockPos> found, BlockPos origin, int max) {
+        if (max == 0) {
+            return new ArrayList<>();
+        }
+        if (max < 0 || found.size() <= max) {
+            return found;
+        }
+        found.sort(Comparator.comparingDouble(origin::distSqr));
+        return new ArrayList<>(found.subList(0, max));
+    }
+
     private List<BlockPos> scanChunksInternal(IPlayerContext ctx, BlockOptionalMetaLookup lookup, List<ChunkPos> chunkPositions, int maxBlocks) {
         assert ctx.world() != null;
+        if (maxBlocks == 0) {
+            return new ArrayList<>();
+        }
         try {
-            // p -> scanChunkInternal(ctx, lookup, p)
-            Stream<BlockPos> posStream = chunkPositions.parallelStream().flatMap(p -> scanChunkInternal(ctx, lookup, p));
+            // Stream.limit on a parallel flatMap is an encounter-order prefix, not the closest maxBlocks.
+            List<BlockPos> found = chunkPositions.parallelStream()
+                    .flatMap(p -> scanChunkInternal(ctx, lookup, p))
+                    .collect(Collectors.toCollection(ArrayList::new));
             if (maxBlocks >= 0) {
-                // WARNING: this can be expensive if maxBlocks is large...
-                // see limit's javadoc
-                posStream = posStream.limit(maxBlocks);
+                return takeClosest(found, ctx.playerFeet(), maxBlocks);
             }
-            return posStream.collect(Collectors.toList());
+            return found;
         } catch (Exception e) {
             e.printStackTrace();
             throw e;

@@ -63,6 +63,10 @@ dependencies {
         shadowCommon sourceSet.output
     }
     shadowCommon "dev.babbaj:nether-pathfinder:${project.nether_pathfinder_version}"
+    // Unimined's merged Minecraft jar drops com.mojang.renderpearl. Compile uses
+    // extractRenderPearl as compileOnly; the NeoForge run classpath still needs the
+    // classes. Do not include/shade: a real 26.3 client.jar already has them.
+    runtimeOnly files(rootProject.tasks.named("extractRenderPearl"))
 }
 
 processResources {

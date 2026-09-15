@@ -1,15 +1,15 @@
 # Installation
 
-The easiest way to install Baritone on this 26.3 branch is to drop the Fabric jar into `mods`. Forge and NeoForge are not built for 26.3 yet. If you know how you can also use it with a custom `version.json`
+The easiest way to install Baritone on this 26.3 branch is to drop the jar for your loader into `mods`. If you know how you can also use it with a custom `version.json`
 (Examples: [1.14.4](https://www.dropbox.com/s/rkml3hjokd3qv0m/1.14.4-Baritone.zip?dl=1), [1.15.2](https://www.dropbox.com/s/8rx6f0kts9hvd4f/1.15.2-Baritone.zip?dl=1), [1.16.5](https://www.dropbox.com/s/i6f292o2i7o9acp/1.16.5-Baritone.zip?dl=1)).
 
 Once Baritone is installed, look [here](USAGE.md) for instructions on how to use it.
 
 ## Prebuilt releases
 
-This fork: [Releases](https://github.com/dysnasia/baritone-26.2/releases). Drop `baritone-fabric-26.3.jar` into `mods` (Fabric only for 26.3).
+This fork: [Releases](https://github.com/dysnasia/baritone-26.2/releases). Drop `baritone-fabric-26.3.jar` or `baritone-neoforge-26.3.jar` into `mods`. Forge 26.3 is not published yet.
 
-This branch is Minecraft **26.3** / Baritone **26.3**, Fabric only. Upstream's historical mapping (not this fork):
+This branch is Minecraft **26.3** / Baritone **26.3**, built for Fabric and NeoForge. Upstream's historical mapping (not this fork):
 
 | Minecraft version | 1.12 | 1.13 | 1.14 | 1.15 | 1.16 | 1.17 | 1.18 | 1.19 | 1.20  | 1.21  | 1.21.4 | 1.21.5 |  1.21.6 - 1.21.8 |
 |-------------------|------|------|------|------|------|------|------|------|-------|-------|--------|--------|------------------|
@@ -28,7 +28,7 @@ That image is for compiling, not a bit-for-bit match of GitHub release jars.
 
 Building Baritone will create the final artifacts in the ``dist`` directory. These are the same as the artifacts created in the [releases](https://github.com/dysnasia/baritone-26.2/releases).
 
-**The Fabric release can simply be added as a Fabric mod.** Forge and NeoForge are not built for 26.3 yet.
+**The Fabric and NeoForge releases can simply be added as mods for that loader.** Forge 26.3 is not published yet; `forge/` is retargeted. When a 26.3 Forge artifact exists, add `forge` to `available_loaders` in `gradle.properties` and set `forge_version` to that loader.
 
 `dist` holds one jar per enabled loader, `baritone-LOADER-VERSION.jar`. That is the API build, so it is both the
 jar you install and the one another mod can integrate against.
@@ -39,6 +39,8 @@ The standalone and unoptimized builds are not copied to `dist`; look in `LOADER/
 - **Unoptimized** (`LOADER/build/libs/baritone-unoptimized-LOADER-VERSION.jar`): Nothing is obfuscated. This shouldn't be used in production, but is really helpful for crash reports.
 
 - **Fabric**: Loadable as a standard Fabric mod. The fabric build may or may not work on Quilt.
+- **NeoForge**: Loadable as a standard NeoForge mod (26.3.0.0-beta).
+- **Forge**: Source is in `forge/` and is retargeted to Minecraft 26.3. Not built until Forge publishes a 26.3 loader, `forge` is added to `available_loaders`, and `forge_version` is set to that loader.
 
 If you build from source you will also find mapping files in the `mapping` directory. These contain the renamings done by ProGuard and are useful if you want to read obfuscated stack traces.
 

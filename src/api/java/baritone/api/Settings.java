@@ -928,7 +928,7 @@ public final class Settings {
      * Note that the number of locations retrieved from cache is additionaly
      * limited by {@link #maxCachedWorldScanCount}.
      */
-    public final Setting<Integer> mineMaxOreLocationsCount = new Setting<>(64);
+    public final Setting<Integer> mineMaxOreLocationsCount = new Setting<>(120);
 
     /**
      * Sets the minimum y level whilst mining - set to 0 to turn off.

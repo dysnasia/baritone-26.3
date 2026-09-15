@@ -117,7 +117,7 @@ public class CreateDistTask extends BaritoneGradleTask {
     }
 
     /**
-     * @return The name to publish this loader's jar under, i.e. {@code baritone-neoforge-26.2.jar}
+     * @return The name to publish this loader's jar under, i.e. {@code baritone-neoforge-26.3.jar}
      */
     private String getDistFileName() {
         return String.format("%s-%s.jar", this.artifactName, this.artifactVersion);

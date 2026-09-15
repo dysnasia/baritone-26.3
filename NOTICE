@@ -19,11 +19,12 @@ This distribution is a MODIFIED version of Baritone, not the original.
     Modified during 2025-2026 by dysnasia (https://github.com/dysnasia)
     Fork:  https://github.com/dysnasia/baritone-26.2
 
-The modifications consist of a port to Minecraft 26.2 / Java 25 / Mojang mappings for the
-Fabric, Forge and NeoForge loaders, together with changes to elytra pathing and some build
-and packaging changes. They are described in README.md. Everything else -- the pathfinder,
-the movement, mining, building and schematic systems, the command system and the settings --
-is the work of the upstream authors and is unchanged in substance.
+The modifications consist of a port to Minecraft 26.3 / Java 25 / Mojang mappings for the
+Fabric and NeoForge loaders (Forge source is retargeted to 26.3; a Forge 26.3 loader
+artifact has not been published yet), together with changes to elytra pathing and some
+build and packaging changes. They are described in README.md. Everything else -- the
+pathfinder, the movement, mining, building and schematic systems, the command system
+and the settings -- is the work of the upstream authors and is unchanged in substance.
 
 No claim of authorship is made over any part of the original work.
 

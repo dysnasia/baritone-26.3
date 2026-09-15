@@ -169,10 +169,10 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
-// The mixin classes are shared by every platform jar, so they have to target the lowest bytecode level any of our
-// loaders' Mixin can read. Fabric ships a fork that goes up to JAVA_25, but Forge ships stock Mixin 0.8.7, whose
-// highest compatibility level is JAVA_21 (class file v65) -- anything newer is rejected outright at mixin apply
-// time. Keep this in sync with "compatibilityLevel" in src/launch/resources/mixins.baritone.json.
+// Mixin class files stay at 21: Forge's stock Mixin 0.8.7 only reads up to class file v65.
+// mixins.baritone.json already declares compatibilityLevel JAVA_25, which Fabric Mixin and
+// NeoForge 26.3's sponge-mixin 0.17.3 both accept. Forge 26.3 is not built until that loader
+// ships a Mixin that understands JAVA_25.
 tasks.named("compileLaunchJava") {
     options.release = 21
 }
