@@ -32,6 +32,7 @@ public final class NetherPath extends AbstractList<BetterBlockPos> {
     private static final NetherPath EMPTY_PATH = new NetherPath(Collections.emptyList());
 
     private final List<BetterBlockPos> backing;
+    private Vec3[] vecCache;
 
     NetherPath(List<BetterBlockPos> backing) {
         this.backing = backing;
@@ -55,8 +56,18 @@ public final class NetherPath extends AbstractList<BetterBlockPos> {
     }
 
     public Vec3 getVec(int index) {
-        final BetterBlockPos pos = this.get(index);
-        return new Vec3(pos.x, pos.y, pos.z);
+        Vec3[] cache = this.vecCache;
+        if (cache == null) {
+            cache = new Vec3[this.backing.size()];
+            this.vecCache = cache;
+        }
+        Vec3 vec = cache[index];
+        if (vec == null) {
+            final BetterBlockPos pos = this.get(index);
+            vec = new Vec3(pos.x, pos.y, pos.z);
+            cache[index] = vec;
+        }
+        return vec;
     }
 
     public static NetherPath emptyPath() {

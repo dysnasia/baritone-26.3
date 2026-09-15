@@ -20,193 +20,235 @@ package baritone.process.elytra;
 import baritone.api.event.events.BlockChangeEvent;
 import baritone.api.utils.BetterBlockPos;
 import baritone.api.utils.IPlayerContext;
-import net.minecraft.world.level.Level;
+import baritone.process.elytra.VanillaElytraOccupancy.OccupancySnapshot;
+import baritone.process.elytra.VanillaElytraOccupancy.PackedColumn;
+import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.CollisionContext;
 
+import java.lang.ref.SoftReference;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.PriorityQueue;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.LongFunction;
 
 /**
- * A pure-Java {@link ElytraTerrainProvider} backed by real loaded chunk data, for use in dimensions other
- * than the Nether (where the native, terrain-predicting {@link NetherPathfinderContext} isn't available -
- * see its javadoc for why). Reactive only: no long-range terrain prediction, so it plans only as far as the
- * client has actually loaded and reports the resulting segment as unfinished, leaving {@link ElytraBehavior}
- * to extend it as more world streams in. Works at any Y, in any dimension.
- * <p>
- * <b>Unknown terrain counts as solid.</b> This mirrors {@code NetherPathfinder.CACHE_MISS_SOLID}, which the
- * native backend uses and which {@link ElytraBehavior} assumes throughout. Vanilla's {@code Level.clip}
- * has the opposite convention - an unloaded chunk reads back as void air, so a ray fired across one reports
- * "clear" - and taking that at face value produces straight-line paths through mountains that simply hadn't
- * rendered yet. Every terrain read here is therefore gated on the chunk actually being loaded.
+ * Pure-Java {@link ElytraTerrainProvider} for dimensions other than the Nether. Packs air/solid bits on
+ * the pathfinder executor; occupancy updates when pack finishes. The pathfinder worker and flight
+ * solver read a frozen snapshot. Unknown terrain is solid, matching {@code NetherPathfinder.CACHE_MISS_SOLID}.
  *
  * @author Brady
  */
 public final class VanillaElytraContext implements ElytraTerrainProvider {
 
-    /** Spacing of the search lattice, in blocks. */
-    private static final int STEP = 8;
-    /** A node this close to the goal is a candidate for terminating the search. */
-    private static final int GOAL_RADIUS = STEP;
-    /** Hard cap on expansions. Overrunning it is benign - the best node found so far is returned. */
-    private static final int MAX_NODES_EXPLORED = 20_000;
-    /** Wall-clock cap. The search runs off-thread but its result is consumed at most once per tick. */
-    private static final long MAX_SEARCH_NANOS = 30_000_000L;
-    /** Weight on the heuristic. Above 1 trades optimality for a much smaller explored set in open air. */
-    private static final double HEURISTIC_WEIGHT = 1.5;
-    /** Gaining altitude burns fireworks; losing it is free. Bias the search accordingly. */
-    private static final double CLIMB_COST_MULT = 1.6;
-    private static final double DESCEND_COST_MULT = 0.85;
-    /** Vertical half-width of the band the search may wander into, relative to the src/dst extremes. */
+    static final int STEP = 8;
+    static final int GOAL_RADIUS = STEP;
+    static final int MAX_NODES_EXPLORED = 20_000;
+    static final long MAX_SEARCH_NANOS = 30_000_000L;
+    static final double HEURISTIC_WEIGHT = 1.5;
+    static final double CLIMB_COST_MULT = 1.6;
+    static final double DESCEND_COST_MULT = 0.85;
     private static final int Y_BAND = 96;
-    /** Chunk-presence sampling interval along a ray. Must stay well under a chunk's 16-block width. */
-    private static final double CHUNK_PROBE_INTERVAL = 4.0;
 
     private static final int CORNER_ROUNDING_ITERATIONS = 3;
     private static final double CORNER_CUT_RATIO = 0.3;
     private static final double SHARP_TURN_ANGLE_DEGREES = 25;
     private static final double MIN_EDGE_LENGTH_TO_CUT = 3.0;
-    /** Cap on how far ahead string pulling looks, to keep it from being O(n^2) in long raytraces. */
     private static final int SMOOTH_LOOKAHEAD = 32;
-    /**
-     * Longest edge handed to {@link ElytraBehavior}. Its progress tracking, stall detection and solver
-     * lookahead are all measured in path <i>indices</i>, calibrated against nether-pathfinder output that
-     * is dense by construction, so string-pulled routes have to be re-subdivided before they leave here.
-     */
     private static final int MAX_EDGE_LENGTH = 16;
+
+    static final int NEIGHBOR_COUNT = 26;
+    static final int[] NEIGHBOR_DX = new int[NEIGHBOR_COUNT];
+    static final int[] NEIGHBOR_DY = new int[NEIGHBOR_COUNT];
+    static final int[] NEIGHBOR_DZ = new int[NEIGHBOR_COUNT];
+    static final double[] NEIGHBOR_STEP_COST = new double[NEIGHBOR_COUNT];
+
+    static {
+        int i = 0;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) {
+                        continue;
+                    }
+                    NEIGHBOR_DX[i] = dx;
+                    NEIGHBOR_DY[i] = dy;
+                    NEIGHBOR_DZ[i] = dz;
+                    NEIGHBOR_STEP_COST[i] = neighborStepCost(dx, dy, dz);
+                    i++;
+                }
+            }
+        }
+    }
 
     private final IPlayerContext ctx;
     private final ExecutorService executor;
     private final Object cullingLock = new Object();
+    private final int worldMinY;
+    private final int worldMaxY;
+    private final ConcurrentHashMap<Long, PackedColumn> occupancy = new ConcurrentHashMap<>();
+    private final LongFunction<PackedColumn> liveColumns = this.occupancy::get;
+    private final VanillaElytraPackQueue packQueue;
     private volatile boolean destroyed;
+    private volatile boolean lastSearchPresent;
+    private volatile int lastExplored;
+    private volatile long lastSearchNanos;
+    private volatile boolean lastReached;
 
     public VanillaElytraContext(final IPlayerContext ctx) {
         this.ctx = ctx;
+        final Level world = ctx.world();
+        this.worldMinY = world.getMinY();
+        // exclusive top, same as minY + height (getMaxY is inclusive)
+        this.worldMaxY = world.getMinY() + world.getHeight();
         this.executor = Executors.newSingleThreadExecutor(r -> {
             final Thread thread = new Thread(r, "Baritone Vanilla Elytra Pathfinder");
             thread.setDaemon(true);
             return thread;
         });
+        this.packQueue = new VanillaElytraPackQueue(this.occupancy, this.executor, () -> this.destroyed);
     }
+
+    private boolean aborted() {
+        return this.destroyed || Thread.currentThread().isInterrupted();
+    }
+
+    private final BooleanSupplier abort = this::aborted;
 
     @Override
     public boolean hasChunk(final ChunkPos pos) {
-        final Level world = this.ctx.world();
-        return world != null && world.hasChunk(pos.x(), pos.z());
+        return !this.destroyed && this.occupancy.containsKey(VanillaElytraOccupancy.chunkKey(pos.x(), pos.z()));
     }
 
     @Override
     public void queueForPacking(final LevelChunk chunk) {
-        // no-op - loaded chunk data is read directly, there's no separate native representation to pack
+        if (this.destroyed || chunk == null) {
+            return;
+        }
+        final SoftReference<LevelChunk> ref = new SoftReference<>(chunk);
+        final ChunkPos pos = chunk.getPos();
+        final long key = VanillaElytraOccupancy.chunkKey(pos.x(), pos.z());
+        this.packQueue.submitPack(key, () -> {
+            final LevelChunk live = ref.get();
+            return live == null ? null : VanillaElytraOccupancy.pack(live);
+        });
     }
 
     @Override
     public void queueBlockUpdate(final BlockChangeEvent event) {
-        // no-op, same reason as queueForPacking
+        if (this.destroyed) {
+            return;
+        }
+        final ChunkPos pos = event.getChunkPos();
+        final long key = VanillaElytraOccupancy.chunkKey(pos.x(), pos.z());
+        final boolean missing;
+        synchronized (this.packQueue) {
+            PackedColumn col = this.occupancy.get(key);
+            missing = col == null;
+            if (col == null) {
+                this.packQueue.invalidate(key);
+            } else {
+                for (final var pair : event.getBlocks()) {
+                    final BlockPos block = pair.first();
+                    final BlockState state = pair.second();
+                    col = VanillaElytraOccupancy.setSolid(col, block.getX(), block.getY(), block.getZ(), !state.isAir());
+                }
+                this.occupancy.put(key, col);
+                this.packQueue.invalidate(key);
+            }
+        }
+        if (missing && this.ctx.world() != null) {
+            final LevelChunk chunk = this.ctx.world().getChunkSource().getChunk(pos.x(), pos.z(), false);
+            if (chunk != null) {
+                this.queueForPacking(chunk);
+            }
+        }
     }
 
     @Override
     public void queueCacheCulling(final int chunkX, final int chunkZ, final int maxDistanceBlocks) {
-        // no-op, there's no cache to cull
+        if (this.destroyed) {
+            return;
+        }
+        this.executor.execute(() -> {
+            synchronized (this.cullingLock) {
+                if (this.destroyed) {
+                    return;
+                }
+                final int maxChunks = Math.max(1, maxDistanceBlocks >> 4);
+                synchronized (this.packQueue) {
+                    this.occupancy.entrySet().removeIf(e -> {
+                        final PackedColumn col = e.getValue();
+                        final int dx = Math.abs(col.chunkX - chunkX);
+                        final int dz = Math.abs(col.chunkZ - chunkZ);
+                        if (Math.max(dx, dz) > maxChunks) {
+                            this.packQueue.invalidate(e.getKey());
+                            return true;
+                        }
+                        return false;
+                    });
+                }
+            }
+        });
     }
 
-    /**
-     * {@inheritDoc}
-     * <p>
-     * This backend holds no pointers into cached chunk data, so there is nothing for this lock to guard.
-     * It exists only to satisfy the interface; callers synchronizing on it are not gaining any exclusion.
-     */
+    @Override
+    public void dropColumn(final int chunkX, final int chunkZ) {
+        if (this.destroyed) {
+            return;
+        }
+        final long key = VanillaElytraOccupancy.chunkKey(chunkX, chunkZ);
+        synchronized (this.packQueue) {
+            this.packQueue.invalidate(key);
+            this.occupancy.remove(key);
+        }
+    }
+
     @Override
     public Object cullingLock() {
         return this.cullingLock;
     }
 
-    /**
-     * @return the chunk containing the given block coordinates, or {@code null} if it isn't loaded. Never
-     * triggers a load, and never substitutes the empty chunk, so an unloaded column is reported honestly
-     * rather than as air.
-     */
-    private LevelChunk chunkAt(final Level world, final int x, final int z) {
-        return world.getChunkSource().getChunk(x >> 4, z >> 4, false);
-    }
-
     @Override
     public boolean isPassable(final int x, final int y, final int z) {
-        final Level world = this.ctx.world();
-        if (world == null) {
+        if (this.destroyed) {
             return false;
         }
-        if (y < world.getMinY() || y >= world.getMaxY()) {
-            return false;
-        }
-        final LevelChunk chunk = this.chunkAt(world, x, z);
-        if (chunk == null) {
-            return false; // unknown terrain is solid
-        }
-        // Deliberately air-only, matching NetherPathfinderContext's `state != AIR` packing rule. Water and
-        // lava are not flyable, and treating foliage as an obstacle is merely conservative.
-        final BlockState state = chunk.getBlockState(new BlockPos(x, y, z));
-        return state.isAir();
+        return VanillaElytraOccupancy.isPassable(this.liveColumns, this.worldMinY, this.worldMaxY, x, y, z);
     }
 
     @Override
     public boolean raytrace(final Vec3 start, final Vec3 end) {
-        if (start.equals(end)) {
-            return true;
-        }
-        final Level world = this.ctx.world();
-        if (world == null) {
-            return false;
-        }
-        if (!this.corridorLoaded(world, start, end)) {
-            return false; // unknown terrain is solid
-        }
-        final HitResult result = world.clip(new ClipContext(
-                start, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.ANY, CollisionContext.empty()
-        ));
-        return result.getType() == HitResult.Type.MISS;
+        return this.raytrace(start.x, start.y, start.z, end.x, end.y, end.z);
     }
 
-    /**
-     * @return {@code true} if every chunk column the segment passes through is loaded. Sampled rather than
-     * walked exactly: at a {@value #CHUNK_PROBE_INTERVAL}-block interval a ray cannot cross a whole 16-wide
-     * column undetected, only clip a corner of one, which is cheap insurance against a much more expensive
-     * exact traversal on a path that is already gated by {@link #hasChunk}.
-     */
-    private boolean corridorLoaded(final Level world, final Vec3 start, final Vec3 end) {
-        final double distance = start.distanceTo(end);
-        final int probes = Math.max(1, Mth.ceil(distance / CHUNK_PROBE_INTERVAL));
-        int lastChunkX = Integer.MIN_VALUE;
-        int lastChunkZ = Integer.MIN_VALUE;
-        for (int i = 0; i <= probes; i++) {
-            final double t = (double) i / probes;
-            final int x = Mth.floor(Mth.lerp(t, start.x, end.x));
-            final int z = Mth.floor(Mth.lerp(t, start.z, end.z));
-            final int chunkX = x >> 4;
-            final int chunkZ = z >> 4;
-            if (chunkX == lastChunkX && chunkZ == lastChunkZ) {
-                continue;
-            }
-            lastChunkX = chunkX;
-            lastChunkZ = chunkZ;
-            if (world.getChunkSource().getChunk(chunkX, chunkZ, false) == null) {
+    boolean raytrace(final double x0, final double y0, final double z0,
+                     final double x1, final double y1, final double z1) {
+        if (this.destroyed) {
+            return false;
+        }
+        return VanillaElytraOccupancy.raytrace(
+                this.liveColumns, this.worldMinY, this.worldMaxY, x0, y0, z0, x1, y1, z1, this.abort);
+    }
+
+    @Override
+    public boolean raytraceBatch(final int count, final double[] src, final double[] dst) {
+        for (int i = 0; i < count; i++) {
+            final int o = i * 3;
+            if (!this.raytrace(src[o], src[o + 1], src[o + 2], dst[o], dst[o + 1], dst[o + 2])) {
                 return false;
             }
         }
@@ -215,45 +257,120 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
 
     @Override
     public CompletableFuture<UnpackedSegment> pathFindAsync(final BlockPos src, final BlockPos dst) {
-        return CompletableFuture.supplyAsync(() -> this.findPath(src, dst), this.executor);
+        if (this.destroyed) {
+            return CompletableFuture.failedFuture(new PathCalculationException("destroyed"));
+        }
+        // Capture chunks on the caller; pack + freeze + search on the executor. Do not join
+        // a pack future here: the tick thread may already hold cullingLock, and cull tasks
+        // on this same executor also take that lock.
+        final long srcKey = VanillaElytraOccupancy.chunkKey(src.getX() >> 4, src.getZ() >> 4);
+        final long dstKey = VanillaElytraOccupancy.chunkKey(dst.getX() >> 4, dst.getZ() >> 4);
+        final int srcGen = this.packQueue.generation(srcKey);
+        final int dstGen = this.packQueue.generation(dstKey);
+        final LevelChunk srcChunk = this.unpackedChunk(src);
+        final LevelChunk dstChunk = this.unpackedChunk(dst);
+        return CompletableFuture.supplyAsync(() -> {
+            this.packCaptured(src, srcChunk, srcGen);
+            this.packCaptured(dst, dstChunk, dstGen);
+            return this.findPath(this.freeze(), src, dst);
+        }, this.executor);
+    }
+
+    private LevelChunk unpackedChunk(final BlockPos pos) {
+        if (this.destroyed) {
+            return null;
+        }
+        final Level world = this.ctx.world();
+        if (world == null) {
+            return null;
+        }
+        final int cx = pos.getX() >> 4;
+        final int cz = pos.getZ() >> 4;
+        final long key = VanillaElytraOccupancy.chunkKey(cx, cz);
+        if (this.occupancy.containsKey(key)) {
+            return null;
+        }
+        return world.getChunkSource().getChunk(cx, cz, false);
+    }
+
+    private void packCaptured(final BlockPos pos, final LevelChunk chunk, final int gen) {
+        if (this.destroyed || chunk == null) {
+            return;
+        }
+        final long key = VanillaElytraOccupancy.chunkKey(pos.getX() >> 4, pos.getZ() >> 4);
+        if (this.occupancy.containsKey(key)) {
+            return;
+        }
+        final PackedColumn column = VanillaElytraOccupancy.pack(chunk);
+        this.packQueue.tryPut(key, column, gen);
+    }
+
+    private void recordSearch(final int explored, final long nanos, final boolean reached) {
+        this.lastSearchPresent = true;
+        this.lastExplored = explored;
+        this.lastSearchNanos = nanos;
+        this.lastReached = reached;
+    }
+
+    int occupancyColumns() {
+        return this.occupancy.size();
+    }
+
+    VanillaElytraPackQueue packQueue() {
+        return this.packQueue;
+    }
+
+    Integer lastExplored() {
+        return this.lastSearchPresent ? this.lastExplored : null;
+    }
+
+    Long lastSearchNanos() {
+        return this.lastSearchPresent ? this.lastSearchNanos : null;
+    }
+
+    Boolean lastReached() {
+        return this.lastSearchPresent ? this.lastReached : null;
+    }
+
+    OccupancySnapshot freeze() {
+        synchronized (this.packQueue) {
+            return VanillaElytraOccupancy.freeze(this.occupancy, this.worldMinY, this.worldMaxY, this.abort);
+        }
     }
 
     /**
-     * The outcome of a search: the waypoints found, and whether they actually arrive at the goal. A route
-     * that stops short is not a failure - it's the honest answer for a backend that can only see as far as
-     * the client has loaded, and {@link ElytraBehavior.PathManager} extends it once more world arrives.
+     * Solver freeze keyed by occupancy stamp. Same snapshot instance if {@code previousStamp} still matches.
      */
+    VanillaElytraPackQueue.SolverFreeze freezeForSolve(final OccupancySnapshot previous, final long previousStamp) {
+        return this.packQueue.freezeForSolve(previous, previousStamp, this.worldMinY, this.worldMaxY, this.abort);
+    }
+
     private record SearchResult(List<BetterBlockPos> route, boolean reachedGoal) {}
 
-    private UnpackedSegment findPath(final BlockPos src, final BlockPos dst) {
-        final Vec3 start = Vec3.atCenterOf(src);
-        final Vec3 end = Vec3.atCenterOf(dst);
-
-        if (this.raytrace(start, end)) {
-            // Straight shot, and `raytrace` has already confirmed the whole corridor is loaded.
+    private UnpackedSegment findPath(final OccupancySnapshot snap, final BlockPos src, final BlockPos dst) {
+        if (this.aborted()) {
+            throw new PathCalculationException("destroyed");
+        }
+        if (snap.raytraceCenters(src.getX(), src.getY(), src.getZ(), dst.getX(), dst.getY(), dst.getZ())) {
+            this.recordSearch(0, 0L, true);
             return UnpackedSegment.of(this.subdivide(List.of(new BetterBlockPos(src), new BetterBlockPos(dst))), true);
         }
 
-        final SearchResult result = this.findRoute(src, dst);
+        final long started = System.nanoTime();
+        final SearchResult result = this.findRoute(snap, src, dst);
         if (result == null) {
-            // Nothing at all was reachable from the start position - a genuine dead end, not a horizon.
+            this.recordSearch(this.lastExplored, System.nanoTime() - started, false);
             throw new PathCalculationException("No route out of " + src);
         }
-        final List<BetterBlockPos> route = this.subdivide(this.roundCorners(this.smoothRoute(result.route())));
+        this.recordSearch(this.lastExplored, System.nanoTime() - started, result.reachedGoal());
+        final List<BetterBlockPos> route = this.subdivide(this.roundCorners(snap, this.smoothRoute(snap, result.route())));
         if (route.size() < 2) {
             throw new PathCalculationException("Route from " + src + " collapsed to a single point");
         }
         return UnpackedSegment.of(route, result.reachedGoal());
     }
 
-    /**
-     * The grid search only ever steps between lattice points, so raw routes come out as a staircase of
-     * turns - too sharp for the flight solver to actually fly without stalling or circling to reorient.
-     * This is a classic "string pulling" pass: from each waypoint, greedily jump ahead to the farthest
-     * later waypoint that's still a clear line of sight away, skipping everything in between. That
-     * collapses zig-zags around a corner into far fewer, straighter segments.
-     */
-    private List<BetterBlockPos> smoothRoute(final List<BetterBlockPos> route) {
+    private List<BetterBlockPos> smoothRoute(final OccupancySnapshot snap, final List<BetterBlockPos> route) {
         if (route.size() < 2) {
             return new ArrayList<>(route);
         }
@@ -262,11 +379,12 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
 
         int i = 0;
         while (i < route.size() - 1) {
-            final Vec3 fromVec = Vec3.atCenterOf(route.get(i));
+            final BetterBlockPos from = route.get(i);
             int farthest = i + 1;
             final int limit = Math.min(route.size() - 1, i + SMOOTH_LOOKAHEAD);
             for (int j = limit; j > i + 1; j--) {
-                if (this.raytrace(fromVec, Vec3.atCenterOf(route.get(j)))) {
+                final BetterBlockPos to = route.get(j);
+                if (snap.raytraceCenters(from.x, from.y, from.z, to.x, to.y, to.z)) {
                     farthest = j;
                     break;
                 }
@@ -277,29 +395,15 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
         return smoothed;
     }
 
-    /**
-     * String pulling only guarantees each consecutive waypoint pair is visibility-clear - it says nothing about
-     * the angle between segments. A single unavoidable sharp turn (e.g. rounding one building corner) survives
-     * it untouched, and since elytra flight has heavy momentum, the flight solver can't snap its heading to
-     * match, so it overshoots, corrects, overshoots again, and ends up circling around the corner instead of
-     * just flying through it.
-     * <p>
-     * This rounds sharp corners via Chaikin corner-cutting: a vertex whose turn angle exceeds
-     * {@link #SHARP_TURN_ANGLE_DEGREES} is replaced with two points pulled in from its neighboring edges,
-     * turning the sharp bend into a short, gentle chord. Repeating this a few times converges towards a smooth
-     * arc through the corner. A cut is only kept if the new chord is still visibility-clear, so this can never
-     * route through terrain that the original waypoints were carefully placed to avoid - it just softens turns
-     * that happen in open air.
-     */
-    private List<BetterBlockPos> roundCorners(final List<BetterBlockPos> route) {
+    private List<BetterBlockPos> roundCorners(final OccupancySnapshot snap, final List<BetterBlockPos> route) {
         List<BetterBlockPos> current = route;
         for (int iter = 0; iter < CORNER_ROUNDING_ITERATIONS && current.size() > 2; iter++) {
-            current = dedupe(roundCornersPass(current));
+            current = dedupe(this.roundCornersPass(snap, current));
         }
         return current;
     }
 
-    private List<BetterBlockPos> roundCornersPass(final List<BetterBlockPos> route) {
+    private List<BetterBlockPos> roundCornersPass(final OccupancySnapshot snap, final List<BetterBlockPos> route) {
         if (route.size() < 3) {
             return new ArrayList<>(route);
         }
@@ -320,9 +424,7 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
             final BetterBlockPos cut2 = lerp(cur, next, CORNER_CUT_RATIO);
 
             if (cut1.equals(cur) || cut2.equals(cur) || cut1.equals(cut2)
-                    || !this.raytrace(Vec3.atCenterOf(cut1), Vec3.atCenterOf(cut2))) {
-                // Either the cut collapsed to nothing, or the shortcut across the corner clips something -
-                // keep the original vertex rather than risk flying through terrain.
+                    || !snap.raytraceCenters(cut1.x, cut1.y, cut1.z, cut2.x, cut2.y, cut2.z)) {
                 result.add(cur);
                 continue;
             }
@@ -335,14 +437,6 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
         return result;
     }
 
-    /**
-     * Splits any edge longer than {@link #MAX_EDGE_LENGTH} into evenly spaced pieces. String pulling is
-     * free to return three waypoints spanning hundreds of blocks, but {@link ElytraBehavior} measures
-     * progress by path index: {@code updatePlayerNear} strides over indices, the stall detector recalculates
-     * when that index hasn't advanced in 100 ticks, and the solver's lookahead is expressed in nodes. On a
-     * 200-block edge none of those units mean anything, and the stall detector fires spuriously - a second,
-     * independent source of the recalculation loop this class used to produce.
-     */
     private List<BetterBlockPos> subdivide(final List<BetterBlockPos> route) {
         if (route.size() < 2) {
             return new ArrayList<>(route);
@@ -364,12 +458,6 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
         return result;
     }
 
-    /**
-     * Removes consecutive duplicates. Corner cutting rounds to block coordinates, so the outgoing cut of one
-     * vertex and the incoming cut of the next routinely land on the same block. Duplicates aren't cosmetic
-     * here: a zero-length edge normalizes to the zero vector, whose dot product is 0, which
-     * {@link #isTurnGentle} reads as a 90-degree turn and cuts again.
-     */
     private static List<BetterBlockPos> dedupe(final List<BetterBlockPos> route) {
         final List<BetterBlockPos> result = new ArrayList<>(route.size());
         for (final BetterBlockPos pos : route) {
@@ -392,9 +480,6 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
         return a.distSqr(b) < MIN_EDGE_LENGTH_TO_CUT * MIN_EDGE_LENGTH_TO_CUT;
     }
 
-    /**
-     * @return the point {@code ratio} of the way from {@code from} towards {@code to}, rounded to the nearest block
-     */
     private static BetterBlockPos lerp(final BetterBlockPos from, final BetterBlockPos to, final double ratio) {
         return new BetterBlockPos(
                 from.x + (int) Math.round((to.x - from.x) * ratio),
@@ -403,154 +488,232 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
         );
     }
 
-    private static final class Node implements Comparable<Node> {
+    /**
+     * Min-heap of packed positions ordered by f. Duplicate packed keys stay in the heap
+     * (decrease-key via extra entries). Compare is {@link Double#compare} on f only.
+     */
+    static final class PackedFHeap {
+        private long[] packed = new long[11];
+        private double[] f = new double[11];
+        private int size;
 
-        private final BetterBlockPos pos;
-        private final double priority;
-
-        private Node(final BetterBlockPos pos, final double priority) {
-            this.pos = pos;
-            this.priority = priority;
+        boolean isEmpty() {
+            return this.size == 0;
         }
 
-        @Override
-        public int compareTo(final Node other) {
-            return Double.compare(this.priority, other.priority);
+        void add(final long packedPos, final double priority) {
+            if (this.size == this.packed.length) {
+                final int cap = this.packed.length << 1;
+                this.packed = java.util.Arrays.copyOf(this.packed, cap);
+                this.f = java.util.Arrays.copyOf(this.f, cap);
+            }
+            this.packed[this.size] = packedPos;
+            this.f[this.size] = priority;
+            this.siftUp(this.size);
+            this.size++;
+        }
+
+        long poll() {
+            final long result = this.packed[0];
+            this.size--;
+            if (this.size > 0) {
+                this.packed[0] = this.packed[this.size];
+                this.f[0] = this.f[this.size];
+                this.siftDown(0);
+            }
+            return result;
+        }
+
+        private void siftUp(int i) {
+            while (i > 0) {
+                final int parent = (i - 1) >>> 1;
+                if (Double.compare(this.f[i], this.f[parent]) >= 0) {
+                    break;
+                }
+                this.swap(i, parent);
+                i = parent;
+            }
+        }
+
+        private void siftDown(int i) {
+            while (true) {
+                final int left = (i << 1) + 1;
+                if (left >= this.size) {
+                    break;
+                }
+                int best = left;
+                final int right = left + 1;
+                if (right < this.size && Double.compare(this.f[right], this.f[left]) < 0) {
+                    best = right;
+                }
+                if (Double.compare(this.f[best], this.f[i]) >= 0) {
+                    break;
+                }
+                this.swap(i, best);
+                i = best;
+            }
+        }
+
+        private void swap(final int a, final int b) {
+            final long p = this.packed[a];
+            this.packed[a] = this.packed[b];
+            this.packed[b] = p;
+            final double pri = this.f[a];
+            this.f[a] = this.f[b];
+            this.f[b] = pri;
         }
     }
 
-    /**
-     * Weighted A* over a coarse lattice, linking only neighbors that are visible (raytrace-clear) from the
-     * node being expanded - so every consecutive pair of waypoints in the returned route is guaranteed to
-     * have a clear line of sight, which is what {@link ElytraBehavior}'s flight solver assumes between path
-     * points. Because unknown terrain reads as solid, the frontier stops at the edge of loaded chunks on its
-     * own; no artificial search radius is needed, and the stopping point is exactly the client's horizon.
-     * <p>
-     * The search never reports outright failure while it made any progress at all. When the budget runs out,
-     * or the frontier is exhausted, or the goal is simply beyond the horizon, it returns the route to the
-     * expanded node closest to the goal, flagged as not having reached it. That is what makes the node and
-     * time budgets tuning parameters rather than failure modes - the previous greedy version had a single
-     * success condition (line of sight to the goal itself) and returned {@code null} for everything else,
-     * which for a goal behind terrain meant a thrown exception on every attempt, forever.
-     *
-     * @return the best route found, or {@code null} only if nothing at all was reachable from {@code src}
-     */
-    private SearchResult findRoute(final BlockPos src, final BlockPos dst) {
-        final Level world = this.ctx.world();
-        if (world == null) {
-            return null;
-        }
-        final BetterBlockPos start = new BetterBlockPos(src);
-        final BetterBlockPos goal = new BetterBlockPos(dst);
-        final Vec3 goalVec = Vec3.atCenterOf(goal);
+    static double fScore(final double g, final int x, final int y, final int z,
+                         final int gx, final int gy, final int gz) {
+        return g + HEURISTIC_WEIGHT * Math.sqrt(distSq(x, y, z, gx, gy, gz));
+    }
 
-        final int minY = Math.max(world.getMinY() + 1, Math.min(start.y, goal.y) - Y_BAND);
-        final int maxY = Math.min(world.getMaxY() - 1, Math.max(start.y, goal.y) + Y_BAND);
+    private SearchResult findRoute(final OccupancySnapshot snap, final BlockPos src, final BlockPos dst) {
+        final int startX = src.getX();
+        final int startY = src.getY();
+        final int startZ = src.getZ();
+        final int goalX = dst.getX();
+        final int goalY = dst.getY();
+        final int goalZ = dst.getZ();
+        final long startPacked = VanillaElytraOccupancy.packPos(startX, startY, startZ);
 
-        final Map<BetterBlockPos, BetterBlockPos> cameFrom = new HashMap<>();
-        final Map<BetterBlockPos, Double> gScore = new HashMap<>();
-        final Set<BetterBlockPos> closed = new HashSet<>();
-        final PriorityQueue<Node> frontier = new PriorityQueue<>();
+        final int minY = Math.max(snap.worldMinY + 1, Math.min(startY, goalY) - Y_BAND);
+        final int maxY = Math.min(snap.worldMaxY - 1, Math.max(startY, goalY) + Y_BAND);
 
-        gScore.put(start, 0.0);
-        frontier.add(new Node(start, 0.0));
+        final Long2LongOpenHashMap cameFrom = new Long2LongOpenHashMap();
+        cameFrom.defaultReturnValue(Long.MIN_VALUE);
+        final Long2DoubleOpenHashMap gScore = new Long2DoubleOpenHashMap();
+        gScore.defaultReturnValue(Double.POSITIVE_INFINITY);
+        final LongOpenHashSet closed = new LongOpenHashSet();
+        final PackedFHeap frontier = new PackedFHeap();
+        this.lastExplored = 0;
 
-        BetterBlockPos best = null;
-        double bestHeuristic = Double.MAX_VALUE;
+        gScore.put(startPacked, 0.0);
+        frontier.add(startPacked, 0.0);
+
+        int bestX = startX;
+        int bestY = startY;
+        int bestZ = startZ;
+        double bestHeuristicSq = Double.MAX_VALUE;
+        boolean foundBest = false;
 
         final long deadline = System.nanoTime() + MAX_SEARCH_NANOS;
+        final double goalRadiusSq = (double) GOAL_RADIUS * (double) GOAL_RADIUS;
         int explored = 0;
 
         while (!frontier.isEmpty()) {
-            if (this.destroyed || Thread.currentThread().isInterrupted()) {
+            if (this.aborted()) {
                 break;
             }
             if (explored >= MAX_NODES_EXPLORED || System.nanoTime() > deadline) {
                 break;
             }
-            final Node node = frontier.poll();
-            final BetterBlockPos current = node.pos;
-            if (!closed.add(current)) {
-                continue; // stale duplicate left over from a decrease-key
+            final long packed = frontier.poll();
+            if (!closed.add(packed)) {
+                continue;
             }
             explored++;
+            this.lastExplored = explored;
 
-            final double heuristic = Math.sqrt(current.distSqr(goal));
-            if (heuristic < bestHeuristic) {
-                bestHeuristic = heuristic;
-                best = current;
+            final int x = VanillaElytraOccupancy.unpackX(packed);
+            final int y = VanillaElytraOccupancy.unpackY(packed);
+            final int z = VanillaElytraOccupancy.unpackZ(packed);
+
+            final double heuristicSq = distSq(x, y, z, goalX, goalY, goalZ);
+            if (heuristicSq < bestHeuristicSq) {
+                bestHeuristicSq = heuristicSq;
+                bestX = x;
+                bestY = y;
+                bestZ = z;
+                foundBest = true;
             }
 
-            // Proximity goal test, not line-of-sight-to-goal. The old visibility test was unsatisfiable
-            // whenever the goal block was solid or buried, because a ray ending inside a collider is a hit.
-            if (heuristic <= GOAL_RADIUS && !current.equals(goal)) {
-                if (this.raytrace(Vec3.atCenterOf(current), goalVec)) {
-                    return new SearchResult(reconstructRoute(cameFrom, current, goal), true);
+            if (x == goalX && y == goalY && z == goalZ) {
+                return new SearchResult(reconstructRoute(cameFrom, packed, startPacked, null), true);
+            }
+            if (heuristicSq <= goalRadiusSq) {
+                if (snap.raytraceCenters(x, y, z, goalX, goalY, goalZ)) {
+                    return new SearchResult(reconstructRoute(cameFrom, packed, startPacked, dst), true);
                 }
-                // Close but the final hop is blocked - keep searching for an approach that isn't.
             }
 
-            final double currentG = gScore.getOrDefault(current, Double.MAX_VALUE);
-            final Vec3 currentVec = Vec3.atCenterOf(current);
+            final double currentG = gScore.get(packed);
 
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dz = -1; dz <= 1; dz++) {
-                        if (dx == 0 && dy == 0 && dz == 0) {
-                            continue;
-                        }
-                        final int ny = current.y + dy * STEP;
-                        if (ny < minY || ny > maxY) {
-                            continue;
-                        }
-                        final BetterBlockPos next = new BetterBlockPos(
-                                current.x + dx * STEP, ny, current.z + dz * STEP
-                        );
-                        if (closed.contains(next)) {
-                            continue;
-                        }
-                        final double stepCost = Math.sqrt(current.distSqr(next))
-                                * (dy > 0 ? CLIMB_COST_MULT : dy < 0 ? DESCEND_COST_MULT : 1.0);
-                        final double tentativeG = currentG + stepCost;
-                        if (tentativeG >= gScore.getOrDefault(next, Double.MAX_VALUE)) {
-                            continue;
-                        }
-                        // Passability is far cheaper than a raytrace, and a node inside terrain would fail
-                        // every one of its own outgoing rays anyway.
-                        if (!this.isPassable(next.x, next.y, next.z)
-                                || !this.raytrace(currentVec, Vec3.atCenterOf(next))) {
-                            continue;
-                        }
-                        gScore.put(next, tentativeG);
-                        cameFrom.put(next, current);
-                        frontier.add(new Node(next, tentativeG + HEURISTIC_WEIGHT * Math.sqrt(next.distSqr(goal))));
-                    }
+            for (int n = 0; n < NEIGHBOR_COUNT; n++) {
+                final int ny = y + NEIGHBOR_DY[n] * STEP;
+                if (ny < minY || ny > maxY) {
+                    continue;
                 }
+                final int nx = x + NEIGHBOR_DX[n] * STEP;
+                final int nz = z + NEIGHBOR_DZ[n] * STEP;
+                final long nextPacked = VanillaElytraOccupancy.packPos(nx, ny, nz);
+                if (closed.contains(nextPacked)) {
+                    continue;
+                }
+                final double tentativeG = currentG + NEIGHBOR_STEP_COST[n];
+                if (tentativeG >= gScore.get(nextPacked)) {
+                    continue;
+                }
+                if (!snap.isPassable(nx, ny, nz)
+                        || !snap.raytraceCenters(x, y, z, nx, ny, nz)) {
+                    continue;
+                }
+                gScore.put(nextPacked, tentativeG);
+                cameFrom.put(nextPacked, packed);
+                frontier.add(nextPacked, fScore(tentativeG, nx, ny, nz, goalX, goalY, goalZ));
             }
         }
 
-        if (best == null || best.equals(start)) {
+        if (this.aborted()) {
+            throw new PathCalculationException("destroyed");
+        }
+        if (!foundBest || (bestX == startX && bestY == startY && bestZ == startZ)) {
             return null;
         }
-        return new SearchResult(reconstructRoute(cameFrom, best, null), false);
+        return new SearchResult(
+                reconstructRoute(cameFrom, VanillaElytraOccupancy.packPos(bestX, bestY, bestZ), startPacked, null),
+                false);
     }
 
-    /**
-     * @param goal the goal to append, or {@code null} for a route that stops short of it. Appending a goal
-     *             the caller hasn't just raytraced to would put a terrain-clipping final edge in the path,
-     *             which {@code pathfindAroundObstacles} would then try, and fail, to route around forever.
-     */
-    private static List<BetterBlockPos> reconstructRoute(final Map<BetterBlockPos, BetterBlockPos> cameFrom,
-                                                         final BetterBlockPos last,
-                                                         final BetterBlockPos goal) {
+    private static double dist(final int x0, final int y0, final int z0, final int x1, final int y1, final int z1) {
+        return Math.sqrt(distSq(x0, y0, z0, x1, y1, z1));
+    }
+
+    private static double distSq(final int x0, final int y0, final int z0, final int x1, final int y1, final int z1) {
+        final double dx = x0 - x1;
+        final double dy = y0 - y1;
+        final double dz = z0 - z1;
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    static double neighborStepCost(final int dx, final int dy, final int dz) {
+        return dist(0, 0, 0, dx * STEP, dy * STEP, dz * STEP)
+                * (dy > 0 ? CLIMB_COST_MULT : dy < 0 ? DESCEND_COST_MULT : 1.0);
+    }
+
+    private static List<BetterBlockPos> reconstructRoute(final Long2LongOpenHashMap cameFrom,
+                                                         final long last,
+                                                         final long start,
+                                                         final BlockPos goal) {
         final List<BetterBlockPos> route = new ArrayList<>();
-        if (goal != null && !goal.equals(last)) {
-            route.add(goal);
+        if (goal != null && VanillaElytraOccupancy.packPos(goal.getX(), goal.getY(), goal.getZ()) != last) {
+            route.add(new BetterBlockPos(goal));
         }
-        BetterBlockPos cur = last;
-        while (cur != null) {
-            route.add(cur);
-            cur = cameFrom.get(cur);
+        long cur = last;
+        while (true) {
+            route.add(new BetterBlockPos(
+                    VanillaElytraOccupancy.unpackX(cur),
+                    VanillaElytraOccupancy.unpackY(cur),
+                    VanillaElytraOccupancy.unpackZ(cur)));
+            if (cur == start) {
+                break;
+            }
+            final long prev = cameFrom.get(cur);
+            if (prev == Long.MIN_VALUE) {
+                break;
+            }
+            cur = prev;
         }
         Collections.reverse(route);
         return dedupe(route);
@@ -559,11 +722,10 @@ public final class VanillaElytraContext implements ElytraTerrainProvider {
     @Override
     public void destroy() {
         this.destroyed = true;
+        this.occupancy.clear();
         this.executor.shutdownNow();
         try {
-            // Level.clip isn't interruptible, so wait for the worker to notice `destroyed` and stop reading
-            // a world the client may be in the middle of tearing down.
-            if (!this.executor.awaitTermination(1, TimeUnit.SECONDS)) {
+            if (!this.executor.awaitTermination(100, TimeUnit.MILLISECONDS)) {
                 System.out.println("Vanilla elytra pathfinder did not shut down in time");
             }
         } catch (InterruptedException e) {

@@ -39,7 +39,6 @@ import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.util.Util;
 
 import java.util.List;
 import java.util.Locale;
@@ -96,7 +95,7 @@ public class ExampleBaritoneControl extends Behavior implements Helper {
             return false;
         } else if (msg.trim().equalsIgnoreCase("orderpizza")) {
             try {
-                Util.getPlatform().openUri("https://www.dominos.com/en/pages/order/");
+                java.awt.Desktop.getDesktop().browse(java.net.URI.create("https://www.dominos.com/en/pages/order/"));
             } catch (Exception ignored) {}
             return false;
         }

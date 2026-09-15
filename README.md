@@ -1,15 +1,14 @@
-# Baritone (26.2 fork)
+# Baritone (26.3 fork)
 
 > **Work in progress.** This branch is under active development and has not been tested much. Things may break or
 > change between commits. Use at your own risk.
 
-Baritone is a Minecraft pathfinder bot. This repository is a fork of it ported to Minecraft 26.2, built for
-Fabric, Forge and NeoForge. It is standalone Baritone, the pathfinding mod on its own, installable like any other
-mod. It does not include or bundle Meteor Client.
+Baritone is a Minecraft pathfinder bot. This repository is a fork of it ported to Minecraft 26.3, currently
+built for Fabric only. Forge and NeoForge source stays in the tree but is not built. It is standalone Baritone,
+the pathfinding mod on its own, installable like any other mod. It does not include or bundle Meteor Client.
 
-Environment: Minecraft 26.2, Java 25, Mojang mappings. Built against Fabric loader 0.19.3, Forge 65.1.3 and
-NeoForge 26.2.0.72, but the mod metadata only sets a lower bound on each loader, so any 26.2-compatible
-Fabric loader from 0.18.6 up, any Forge 65 build or any NeoForge for 26.2 will load it.
+Environment: Minecraft 26.3, Java 25, Mojang mappings. Built against Fabric loader 0.19.5. The mod metadata
+requires Fabric loader 0.19.5 or newer and Minecraft 26.3.
 
 ## Credits
 
@@ -18,7 +17,7 @@ with contributions from many others, and it is developed at
 [cabaletta/baritone](https://github.com/cabaletta/baritone). The pathfinding, movement, mining, building and
 command systems in this repository are theirs.
 
-All this fork adds is the port to Minecraft 26.2 and the elytra changes listed under
+All this fork adds is the port to Minecraft 26.3 and the elytra changes listed under
 [What's different in this fork](#whats-different-in-this-fork). It descends from
 [cabaletta/baritone](https://github.com/cabaletta/baritone) by way of
 [wagyourtail/baritone](https://github.com/wagyourtail/baritone) and
@@ -29,12 +28,11 @@ Send your stars, sponsorship and thanks upstream to cabaletta/baritone.
 ## Download
 
 Grab the latest build from the [Releases page](https://github.com/dysnasia/baritone-26.2/releases/latest) and drop
-it into your `mods` folder: `baritone-fabric-26.2.jar` for Fabric (alongside Fabric API),
-`baritone-forge-26.2.jar` for Forge, or `baritone-neoforge-26.2.jar` for NeoForge.
+`baritone-fabric-26.3.jar` into your `mods` folder (alongside Fabric API). Forge and NeoForge are not built for 26.3 yet.
 
 ## What's different in this fork
 
-- Ported to Minecraft 26.2 / Java 25 / Mojmap, for Fabric, Forge and NeoForge.
+- Ported to Minecraft 26.3 / Java 25 / Mojmap, Fabric only for now.
 - Elytra pathing now works reactively in the Overworld and the End, not only the Nether:
   - `VanillaElytraContext` and `ElytraTerrainProvider` add a pure-Java, chunk-data-backed pathfinder for the
     dimensions where the native, terrain-predicting Nether pathfinder is unavailable.
@@ -58,15 +56,11 @@ and works with any JDK 25:
 
 ```
 ./gradlew :fabric:remapJar
-./gradlew :forge:remapJar
-./gradlew :neoforge:remapJar
 ```
 
-Those jars land in `fabric/build/libs/`, `forge/build/libs/` and `neoforge/build/libs/`. A full `./gradlew build`
-also writes one ProGuarded release jar per enabled loader to `dist/`.
+That jar lands in `fabric/build/libs/`. A full `./gradlew build` also writes the ProGuarded release jar to `dist/`.
 
-`available_loaders` in `gradle.properties` controls which loaders get built. It is currently set to
-`fabric,forge,neoforge`.
+`available_loaders` in `gradle.properties` controls which loaders get built. It is currently set to `fabric`.
 
 ## Usage
 

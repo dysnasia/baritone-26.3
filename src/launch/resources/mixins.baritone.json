@@ -1,7 +1,7 @@
 {
   "required": true,
   "package": "baritone.launch.mixins",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "verbose": false,
   "injectors": {
     "maxShiftBy": 2,

@@ -22,20 +22,24 @@ import baritone.api.Settings;
 import baritone.utils.accessor.IEntityRenderManager;
 import baritone.utils.accessor.IRenderPipelines;
 import baritone.utils.accessor.IRenderType;
-import com.mojang.blaze3d.IndexType;
-import com.mojang.blaze3d.PrimitiveTopology;
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.DepthStencilState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.platform.BlendFactor;
-import com.mojang.blaze3d.platform.CompareOp;
+import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.pipeline.BlendFactor;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.CompareOp;
+import com.mojang.renderpearl.api.pipeline.DepthStencilState;
+import com.mojang.renderpearl.api.pipeline.IndexType;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.StagedVertexBuffer;
 import net.minecraft.client.renderer.blockentity.BeaconRenderer;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
@@ -48,6 +52,12 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.awt.*;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.function.BiFunction;
 
 public interface IRenderer {
@@ -118,6 +128,21 @@ public interface IRenderer {
 
     float[] color = new float[]{1.0F, 1.0F, 1.0F, 255.0F};
 
+    List<GpuBuffer> overlayBuffersLive = new ArrayList<>();
+    Deque<List<GpuBuffer>> overlayBufferFrames = new ArrayDeque<>();
+
+    static void nextOverlayFrame() {
+        overlayBufferFrames.addLast(new ArrayList<>(overlayBuffersLive));
+        overlayBuffersLive.clear();
+        // GlCommandEncoder.submit waits for submit N-2. Close frame N only at N+3 overlay,
+        // after submit N+2 has waited for that work.
+        while (overlayBufferFrames.size() > 2) {
+            for (GpuBuffer buffer : overlayBufferFrames.removeFirst()) {
+                buffer.close();
+            }
+        }
+    }
+
     static void glColor(Color color, float alpha) {
         float[] colorComponents = color.getColorComponents(null);
         IRenderer.color[0] = colorComponents[0];
@@ -161,15 +186,34 @@ public interface IRenderer {
         try (meshData) {
             MeshData.DrawState drawState = meshData.drawState();
             PreparedRenderType prepared = renderType.prepare();
-            try (GpuBuffer vertexBuffer = RenderSystem.getDevice().createBuffer(
+            GpuBuffer vertexBuffer = RenderSystem.getDevice().createBuffer(
                     () -> "baritone_vertex_buffer",
                     GpuBuffer.USAGE_VERTEX,
                     meshData.vertexBuffer()
+            );
+            overlayBuffersLive.add(vertexBuffer);
+            RenderSystem.AutoStorageIndexBuffer sequentialIndices = RenderSystem.getSequentialBuffer(drawState.primitiveTopology());
+            sequentialIndices.requestIndexCount(drawState.indexCount());
+            sequentialIndices.getBuffer(drawState.indexCount());
+            IndexType indexType = sequentialIndices.type();
+            StagedVertexBuffer.ExecuteInfo executeInfo = new StagedVertexBuffer.ExecuteInfo(
+                    vertexBuffer,
+                    null,
+                    indexType,
+                    0,
+                    0,
+                    drawState.indexCount(),
+                    drawState.primitiveTopology()
+            );
+            RenderTarget target = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+            try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
+                    () -> "baritone overlay",
+                    target.getColorTextureView(),
+                    Optional.empty(),
+                    target.getDepthTextureView(),
+                    OptionalDouble.empty()
             )) {
-                RenderSystem.AutoStorageIndexBuffer sequentialIndices = RenderSystem.getSequentialBuffer(drawState.primitiveTopology());
-                GpuBuffer indexBuffer = sequentialIndices.getBuffer(drawState.indexCount());
-                IndexType indexType = sequentialIndices.type();
-                prepared.drawFromBuffer(vertexBuffer, indexBuffer, indexType, 0, 0, drawState.indexCount());
+                prepared.drawFromBuffer(executeInfo, pass);
             }
         }
     }

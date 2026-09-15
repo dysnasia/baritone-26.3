@@ -39,6 +39,8 @@ import baritone.api.utils.input.Input;
 import baritone.pathing.movement.CalculationContext;
 import baritone.pathing.movement.movements.MovementFall;
 import baritone.process.elytra.ElytraBehavior;
+import baritone.process.elytra.ElytraDebug;
+import baritone.process.elytra.ElytraFlightPolicy;
 import baritone.process.elytra.NetherPathfinderContext;
 import baritone.process.elytra.NullElytraProcess;
 import baritone.utils.BaritoneProcessHelper;
@@ -74,11 +76,19 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
     @Override
     public void onLostControl() {
+        resetFlightState(true);
+    }
+
+    /** @param clearBadLandingSpots false for a mid-flight landing retry so rejected pads stay banned */
+    private void resetFlightState(boolean clearBadLandingSpots) {
         this.state = State.START_FLYING; // TODO: null state?
         this.goingToLandingSpot = false;
         this.landingSpot = null;
         this.reachedGoal = false;
         this.goal = null;
+        if (clearBadLandingSpots) {
+            this.badLandingSpots.clear();
+        }
         destroyBehaviorAsync();
     }
 
@@ -87,6 +97,10 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         baritone.getGameEventHandler().registerEventListener(this);
     }
 
+    /**
+     * Native nether-pathfinder must load or this returns {@link NullElytraProcess},
+     * including Overworld and End. Do not bypass that gate.
+     */
     public static IElytraProcess create(final Baritone baritone) {
         return NetherPathfinderContext.isSupported()
                 ? new ElytraProcess(baritone)
@@ -223,7 +237,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                 return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
             }
             if (this.goal == null) {
-                this.goal = new GoalYLevel(31);
+                this.goal = new GoalYLevel(ElytraFlightPolicy.AUTO_JUMP_GOAL_Y);
             }
             final IPathExecutor executor = baritone.getPathingBehavior().getCurrent();
             if (executor != null && executor.getPath().getGoal() == this.goal) {
@@ -261,8 +275,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
         if (this.state == State.GET_TO_JUMP) {
             final IPathExecutor executor = baritone.getPathingBehavior().getCurrent();
-            // TODO 1.21.5: replace `ctx.player().getDeltaMovement().y < -0.377` with `ctx.player().fallDistance > 1.0f`
-            final boolean canStartFlying = ctx.player().getDeltaMovement().y < -0.377
+            final boolean canStartFlying = ElytraFlightPolicy.canDeployElytra(ctx.player().fallDistance)
                     && !isSafeToCancel
                     && executor != null
                     && executor.getPath().movements().get(executor.getPosition()) instanceof MovementFall;
@@ -280,8 +293,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                 baritone.getPathingBehavior().secretInternalSegmentCancel();
             }
             baritone.getInputOverrideHandler().clearAllKeys();
-            // TODO 1.21.5: replace `ctx.player().getDeltaMovement().y < -0.377` with `ctx.player().fallDistance > 1.0f`
-            if (ctx.player().getDeltaMovement().y < -0.377) {
+            if (ElytraFlightPolicy.canDeployElytra(ctx.player().fallDistance)) {
                 baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, true);
             }
         }
@@ -313,6 +325,21 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         return "Elytra - " + this.state.description;
     }
 
+    /**
+     * One-shot optimizer snapshot. Does not start or change flight.
+     */
+    public ElytraDebug.Snapshot debugSnapshot(final baritone.api.utils.IPlayerContext playerCtx) {
+        if (this.behavior == null) {
+            return ElytraDebug.idle(
+                    true,
+                    "ElytraProcess",
+                    playerCtx,
+                    ElytraDebug.predictedBackend(playerCtx),
+                    "none");
+        }
+        return this.behavior.debugSnapshot(this.state == null ? "n/a" : this.state.description, playerCtx);
+    }
+
     @Override
     public void repackChunks() {
         if (this.behavior != null) {
@@ -331,10 +358,11 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     }
 
     private void pathTo0(BlockPos destination, boolean appendDestination) {
-        if (ctx.player() == null || !isSupportedDimension(ctx.player().level().dimension())) {
+        if (ctx.player() == null || !ElytraFlightPolicy.isSupportedDimension(ctx.player().level().dimension())) {
             return;
         }
-        this.onLostControl();
+        // Keep rejected pads when this is a mid-flight landing retry.
+        this.resetFlightState(!appendDestination);
         this.predictingTerrain = Baritone.settings().elytraPredictTerrain.value;
         this.behavior = new ElytraBehavior(this.baritone, this, destination, appendDestination);
         if (ctx.world() != null) {
@@ -346,20 +374,18 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     @Override
     public void pathTo(Goal iGoal) {
         final int minY = ctx.world().dimensionType().minY();
-        final int maxY = minY + ctx.world().dimensionType().height();
+        final int exclusiveMaxY = minY + ctx.world().dimensionType().height();
         final int x;
         final int y;
         final int z;
         if (iGoal instanceof GoalXZ) {
             GoalXZ goal = (GoalXZ) iGoal;
             x = goal.getX();
-            // y=64 is the Nether's mid-air cruising altitude, but in the overworld it is normally inside
-            // stone or underwater. A destination buried in terrain can never be raytraced to, so the vanilla
-            // planner could never confirm arrival and every recalculation failed. Aim for open air instead
-            // and let the landing logic pick the actual touchdown spot.
-            y = ctx.world().dimension() == Level.NETHER
-                    ? 64
-                    : Math.min(maxY - 8, Math.max(ctx.world().getSeaLevel() + 80, ctx.playerFeet().y));
+            y = ElytraFlightPolicy.goalXZCruiseY(
+                    ctx.world().dimension(),
+                    exclusiveMaxY,
+                    ctx.world().getSeaLevel(),
+                    ctx.playerFeet().y);
             z = goal.getZ();
         } else if (iGoal instanceof GoalBlock) {
             GoalBlock goal = (GoalBlock) iGoal;
@@ -369,14 +395,10 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         } else {
             throw new IllegalArgumentException("The goal must be a GoalXZ or GoalBlock");
         }
-        if (y <= minY || y >= maxY) {
-            throw new IllegalArgumentException("The y of the goal is not between " + minY + " and " + maxY);
+        if (y <= minY || y >= exclusiveMaxY) {
+            throw new IllegalArgumentException("The y of the goal is not between " + minY + " and " + exclusiveMaxY);
         }
         this.pathTo(new BlockPos(x, y, z));
-    }
-
-    private static boolean isSupportedDimension(net.minecraft.resources.ResourceKey<Level> dimension) {
-        return dimension == Level.NETHER || dimension == Level.OVERWORLD || dimension == Level.END;
     }
 
     private boolean shouldLandForSafety() {
@@ -431,8 +453,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
     @Override
     public void onWorldEvent(WorldEvent event) {
-        if (event.getWorld() != null && event.getState() == EventState.POST) {
-            // Exiting the world, just destroy
+        if (event.getState() == EventState.POST) {
             destroyBehaviorAsync();
         }
     }
@@ -569,7 +590,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
     private BetterBlockPos checkLandingSpot(BlockPos pos, LongOpenHashSet checkedSpots) {
         BlockPos.MutableBlockPos mut = new BlockPos.MutableBlockPos(pos.getX(), pos.getY(), pos.getZ());
-        while (mut.getY() >= 0) {
+        while (ElytraFlightPolicy.isLandingScanY(mut.getY())) {
             if (checkedSpots.contains(mut.asLong())) {
                 return null;
             }

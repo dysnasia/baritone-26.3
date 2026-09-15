@@ -12,6 +12,7 @@
 - **Parkour** Sprint jumping over 1, 2, or 3 block gaps
 - **Parkour place** Sprint jumping over a 3 block gap and placing the block to land on while executing the jump. It's really cool.
 - **Pigs** It can sort of control pigs. I wouldn't rely on it though.
+- **Elytra** `#elytra` flies to the current goal. In the Nether it can use the native nether-pathfinder (terrain prediction from the world seed). In the Overworld and the End it uses a pure-Java planner over loaded chunks, so it is reactive rather than predictive.
 
 # Pathing method
 Baritone uses A*, with some modifications: 

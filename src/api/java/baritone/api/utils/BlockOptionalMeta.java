@@ -357,25 +357,25 @@ public final class BlockOptionalMeta {
             // Simplified from {@link net.minecraft.server.WorldLoader#load()}
             CloseableResourceManager closeableResourceManager = new MultiPackResourceManager(
                 PackType.SERVER_DATA,
-                List.of(ServerPacksSource.createVanillaPackSource())
+                List.of(ServerPacksSource.createVanillaPackSource().fullResources())
             );
             LayeredRegistryAccess<RegistryLayer> baseLayeredRegistry = RegistryLayer.createRegistryAccess();
             List<Registry.PendingTags<?>> pendingTags = TagLoader.loadTagsForExistingRegistries(
                 closeableResourceManager, baseLayeredRegistry.getLayer(RegistryLayer.STATIC)
             );
-            List<HolderLookup.RegistryLookup<?>> worldGenRegistryLookupList = TagLoader.buildUpdatedLookups(
-                baseLayeredRegistry.getAccessForLoading(RegistryLayer.WORLDGEN),
+            List<HolderLookup.RegistryLookup<?>> worldRegistryLookupList = TagLoader.buildUpdatedLookups(
+                baseLayeredRegistry.getAccessForLoading(RegistryLayer.WORLD),
                 pendingTags
             );
-            RegistryAccess.Frozen worldgenRegistries = RegistryDataLoader.load(
+            RegistryAccess.Frozen worldRegistries = RegistryDataLoader.load(
                 closeableResourceManager,
-                worldGenRegistryLookupList,
-                RegistryDataLoader.WORLDGEN_REGISTRIES,
+                worldRegistryLookupList,
+                RegistryDataLoader.WORLD_REGISTRIES,
                 ForkJoinPool.commonPool()
             ).join();
             LayeredRegistryAccess<RegistryLayer> layeredRegistryAccess = baseLayeredRegistry.replaceFrom(
-                RegistryLayer.WORLDGEN,
-                worldgenRegistries
+                RegistryLayer.WORLD,
+                worldRegistries
             );
             return ReloadableServerRegistries.reload(
                 layeredRegistryAccess,

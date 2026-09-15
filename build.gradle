@@ -90,6 +90,10 @@ allprojects {
         implementation "dev.babbaj:nether-pathfinder:${project.nether_pathfinder_version}"
 
         implementation 'com.google.code.findbugs:jsr305:3.0.2'
+
+        // Minecraft 26.3 moved GPU pipelines into com.mojang.renderpearl. Unimined's merged
+        // jar currently drops that client-only package, so compile against an extracted copy.
+        compileOnly files(rootProject.layout.buildDirectory.file("libs/renderpearl-${rootProject.minecraft_version}.jar"))
     }
 
     unimined.minecraft(sourceSets.main, true) {
@@ -104,12 +108,27 @@ allprojects {
 
     tasks.withType(JavaCompile).configureEach {
         it.options.encoding = "UTF-8"
+        it.dependsOn rootProject.tasks.matching { it.name == "extractRenderPearl" }
 
         def targetVersion = project.java_version.toInteger()
         if (JavaVersion.current().isJava9Compatible()) {
             it.options.release = targetVersion
         }
     }
+}
+
+def mcClientJar = file("${gradle.gradleUserHomeDir}/caches/unimined/net/minecraft/minecraft/${minecraft_version}/minecraft-${minecraft_version}-client.jar")
+tasks.register("extractRenderPearl", Jar) {
+    from({
+        if (!mcClientJar.exists()) {
+            throw new GradleException("Minecraft ${minecraft_version} client jar missing at ${mcClientJar}. Run a Gradle configure/download first so Unimined can fetch it.")
+        }
+        zipTree(mcClientJar)
+    }) {
+        include "com/mojang/renderpearl/**"
+    }
+    archiveFileName = "renderpearl-${minecraft_version}.jar"
+    destinationDirectory = layout.buildDirectory.dir("libs")
 }
 
 unimined.minecraft {

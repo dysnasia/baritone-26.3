@@ -61,10 +61,11 @@ Commands in Baritone:
 - `reloadall` to reload Baritone's world cache or `saveall` to save Baritone's world cache.
 - `find` to search through Baritone's cache and attempt to find the location of the block.
 - `surface` or `top` to tell Baritone to head towards the closest surface-like area, this can be the surface or highest available air space.
+- `elytra` to fly to the current goal in the Overworld, the Nether, or the End (`#goal` / `#goto` first). `elytra supported` reports whether the native nether-pathfinder library loaded (used for Nether terrain prediction). `elytra reset` keeps the same destination; `elytra repack` re-feeds loaded chunks to the planner. `elytra debug` prints an optimizer snapshot and does not start or change flight.
 - `version` to get the version of Baritone you're running
 - `damn` daniel
 
-All the settings and documentation are <a href="https://github.com/cabaletta/baritone/blob/master/src/api/java/baritone/api/Settings.java">here</a>. If you find HTML easier to read than Javadoc, you can look <a href="https://baritone.leijurv.com/baritone/api/Settings.html#field.detail">here</a>.
+All the settings and documentation are in <a href="src/api/java/baritone/api/Settings.java">Settings.java</a> in this tree. Upstream HTML javadoc (not 26.2-specific) is <a href="https://baritone.leijurv.com/baritone/api/Settings.html#field.detail">here</a>.
 
 There are about a hundred settings, but here are some fun / interesting / important ones that you might want to look at changing in normal usage of Baritone. The documentation for each can be found at the above links.
 - `allowBreak`

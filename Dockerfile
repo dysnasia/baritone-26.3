@@ -1,16 +1,6 @@
-FROM ubuntu:focal
-
-ENV DEBIAN_FRONTEND noninteractive
-
-RUN apt update -y
-
-RUN apt install \
-          openjdk-21-jdk \
-	  git \
-          --assume-yes
-
-COPY . /code
+FROM eclipse-temurin:25-jdk
 
 WORKDIR /code
+COPY . /code
 
 RUN ./gradlew build

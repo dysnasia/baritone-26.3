@@ -59,6 +59,11 @@ public interface ElytraTerrainProvider {
     void queueCacheCulling(int chunkX, int chunkZ, int maxDistanceBlocks);
 
     /**
+     * Drops a packed column when the chunk unloads. Default is a no-op (native backend culls on its own).
+     */
+    default void dropColumn(int chunkX, int chunkZ) {}
+
+    /**
      * @return the lock that must be held while there are active pointers into cached chunk data
      */
     Object cullingLock();

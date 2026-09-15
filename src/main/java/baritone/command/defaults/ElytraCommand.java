@@ -27,14 +27,14 @@ import baritone.api.command.helpers.TabCompleteHelper;
 import baritone.api.pathing.goals.Goal;
 import baritone.api.process.ICustomGoalProcess;
 import baritone.api.process.IElytraProcess;
+import baritone.process.elytra.ElytraDebug;
+import baritone.process.elytra.ElytraFlightPolicy;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.world.level.Level;
-
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
@@ -55,27 +55,30 @@ public class ElytraCommand extends Command {
             logDirect(elytra.isLoaded() ? "yes" : unsupportedSystemMessage());
             return;
         }
+        if (args.hasExactlyOne() && args.peekString().equals("debug")) {
+            args.getString();
+            logDirect(ElytraDebug.dump(elytra, ctx));
+            return;
+        }
         if (!elytra.isLoaded()) {
             throw new CommandInvalidStateException(unsupportedSystemMessage());
         }
 
         if (!args.hasAny()) {
-            final boolean inNether = ctx.world().dimension() == Level.NETHER;
-            if (inNether) {
-                if (Baritone.settings().elytraTermsAccepted.value) {
-                    if (detectOn2b2t()) {
-                        warn2b2t();
-                    }
-                } else {
-                    gatekeep();
+            final boolean inNether = ElytraFlightPolicy.usesNetherTerrainPrediction(ctx.world().dimension());
+            if (Baritone.settings().elytraTermsAccepted.value) {
+                if (inNether && detectOn2b2t()) {
+                    warn2b2t();
                 }
+            } else {
+                gatekeep(inNether);
             }
             Goal iGoal = customGoalProcess.mostRecentGoal();
             if (iGoal == null) {
                 throw new CommandInvalidStateException("No goal has been set");
             }
             final var dimension = ctx.world().dimension();
-            if (dimension != Level.NETHER && dimension != Level.OVERWORLD && dimension != Level.END) {
+            if (!ElytraFlightPolicy.isSupportedDimension(dimension)) {
                 throw new CommandInvalidStateException("Only works in the overworld, the nether, and the end");
             }
             try {
@@ -129,21 +132,28 @@ public class ElytraCommand extends Command {
         return clippy;
     }
 
-    private void gatekeep() {
+    private void gatekeep(boolean inNether) {
         MutableComponent gatekeep = Component.literal("");
         gatekeep.append("To disable this message, enable the setting elytraTermsAccepted\n");
-        gatekeep.append("Baritone Elytra is an experimental feature. It is only intended for long distance travel in the Nether using fireworks for vanilla boost. It will not work with any other mods (\"hacks\") for non-vanilla boost. ");
+        gatekeep.append("Baritone Elytra is an experimental feature. It is intended for long distance travel in the Overworld, the Nether, and the End using fireworks for vanilla boost. It will not work with any other mods (\"hacks\") for non-vanilla boost. ");
         MutableComponent gatekeep2 = Component.literal("If you want Baritone to attempt to take off from the ground for you, you can enable the elytraAutoJump setting (not advisable on laggy servers!). ");
         gatekeep2.setStyle(gatekeep2.getStyle().withHoverEvent(new HoverEvent.ShowText(Component.literal(Baritone.settings().prefix.value + "set elytraAutoJump true"))));
         gatekeep.append(gatekeep2);
         MutableComponent gatekeep3 = Component.literal("If you want Baritone to go slower, enable the elytraConserveFireworks setting and/or decrease the elytraFireworkSpeed setting. ");
         gatekeep3.setStyle(gatekeep3.getStyle().withHoverEvent(new HoverEvent.ShowText(Component.literal(Baritone.settings().prefix.value + "set elytraConserveFireworks true\n" + Baritone.settings().prefix.value + "set elytraFireworkSpeed 0.6\n(the 0.6 number is just an example, tweak to your liking)"))));
         gatekeep.append(gatekeep3);
+        if (inNether) {
+            appendNetherPredictLecture(gatekeep);
+        }
+        logDirect(gatekeep);
+    }
+
+    private void appendNetherPredictLecture(MutableComponent gatekeep) {
         MutableComponent gatekeep4 = Component.literal("Baritone Elytra ");
         MutableComponent red = Component.literal("wants to know the seed");
         red.setStyle(red.getStyle().withColor(ChatFormatting.RED).withUnderlined(true).withBold(true));
         gatekeep4.append(red);
-        gatekeep4.append(" of the world you are in. If it doesn't have the correct seed, it will frequently backtrack. It uses the seed to generate terrain far beyond what you can see, since terrain obstacles in the Nether can be much larger than your render distance. ");
+        gatekeep4.append(" of the Nether you are in. If it doesn't have the correct seed, it will frequently backtrack. It uses the seed to generate terrain far beyond what you can see, since terrain obstacles in the Nether can be much larger than your render distance. Overworld and End flight do not use the seed. ");
         gatekeep.append(gatekeep4);
         gatekeep.append("\n");
         if (detectOn2b2t()) {
@@ -162,23 +172,18 @@ public class ElytraCommand extends Command {
                 }
             }
             gatekeep.append(gatekeep5);
+        } else if (Baritone.settings().elytraNetherSeed.value == NEW_2B2T_SEED) {
+            MutableComponent gatekeep5 = Component.literal("Baritone doesn't know the seed of your Nether. Set it with: " + Baritone.settings().prefix.value + "set elytraNetherSeed seedgoeshere\n");
+            gatekeep5.append("For the time being, elytraPredictTerrain is defaulting to false since the seed is unknown.");
+            gatekeep.append(gatekeep5);
+            Baritone.settings().elytraPredictTerrain.value = false;
+        } else if (Baritone.settings().elytraPredictTerrain.value) {
+            MutableComponent gatekeep5 = Component.literal("Baritone Elytra is predicting Nether terrain assuming that " + Baritone.settings().elytraNetherSeed.value + " is the correct seed. Change that with " + Baritone.settings().prefix.value + "set elytraNetherSeed seedgoeshere, or disable it with " + Baritone.settings().prefix.value + "set elytraPredictTerrain false");
+            gatekeep.append(gatekeep5);
         } else {
-            if (Baritone.settings().elytraNetherSeed.value == NEW_2B2T_SEED) {
-                MutableComponent gatekeep5 = Component.literal("Baritone doesn't know the seed of your world. Set it with: " + Baritone.settings().prefix.value + "set elytraNetherSeed seedgoeshere\n");
-                gatekeep5.append("For the time being, elytraPredictTerrain is defaulting to false since the seed is unknown.");
-                gatekeep.append(gatekeep5);
-                Baritone.settings().elytraPredictTerrain.value = false;
-            } else {
-                if (Baritone.settings().elytraPredictTerrain.value) {
-                    MutableComponent gatekeep5 = Component.literal("Baritone Elytra is predicting terrain assuming that " + Baritone.settings().elytraNetherSeed.value + " is the correct seed. Change that with " + Baritone.settings().prefix.value + "set elytraNetherSeed seedgoeshere, or disable it with " + Baritone.settings().prefix.value + "set elytraPredictTerrain false");
-                    gatekeep.append(gatekeep5);
-                } else {
-                    MutableComponent gatekeep5 = Component.literal("Baritone Elytra is not predicting terrain. If you don't know the seed, this is the correct thing to do. If you do know the seed, input it with " + Baritone.settings().prefix.value + "set elytraNetherSeed seedgoeshere, and then enable it with " + Baritone.settings().prefix.value + "set elytraPredictTerrain true");
-                    gatekeep.append(gatekeep5);
-                }
-            }
+            MutableComponent gatekeep5 = Component.literal("Baritone Elytra is not predicting Nether terrain. If you don't know the seed, this is the correct thing to do. If you do know the seed, input it with " + Baritone.settings().prefix.value + "set elytraNetherSeed seedgoeshere, and then enable it with " + Baritone.settings().prefix.value + "set elytraPredictTerrain true");
+            gatekeep.append(gatekeep5);
         }
-        logDirect(gatekeep);
     }
 
     private boolean detectOn2b2t() {
@@ -193,7 +198,7 @@ public class ElytraCommand extends Command {
     public Stream<String> tabComplete(String label, IArgConsumer args) throws CommandException {
         TabCompleteHelper helper = new TabCompleteHelper();
         if (args.hasExactlyOne()) {
-            helper.append("reset", "repack", "supported");
+            helper.append("reset", "repack", "supported", "debug");
         }
         return helper.filterPrefix(args.getString()).stream();
     }
@@ -205,14 +210,20 @@ public class ElytraCommand extends Command {
 
     @Override
     public List<String> getLongDesc() {
+        return longDescLines();
+    }
+
+    public static List<String> longDescLines() {
         return Arrays.asList(
-                "The elytra command tells baritone to, in the nether, automatically fly to the current goal.",
+                "The elytra command tells baritone to automatically fly to the current goal in the Overworld, the Nether, or the End.",
+                "Nether seed / elytraPredictTerrain only apply in the Nether. Overworld and End use loaded chunks.",
                 "",
                 "Usage:",
                 "> elytra - fly to the current goal",
                 "> elytra reset - Resets the state of the process, but will try to keep flying to the same goal.",
-                "> elytra repack - Queues all of the chunks in render distance to be given to the native library.",
-                "> elytra supported - Tells you if baritone ships a native library that is compatible with your PC."
+                "> elytra repack - Queues all of the chunks in render distance to be given to the planner.",
+                "> elytra supported - Tells you if the native nether-pathfinder library loaded (used for Nether terrain prediction).",
+                "> elytra debug - Print an optimizer snapshot (vanilla freeze, pack threads, last A*, motion). Does not start or change flight."
         );
     }
 
